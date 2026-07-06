@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from typing import Tuple, Dict, Any
 from dotenv import load_dotenv
 
-from sqlalchemy import create_engine, Column, String, Text, DateTime, text
+from sqlalchemy import create_engine, Column, String, Text, DateTime, text, inspect
 from sqlalchemy.orm import declarative_base, sessionmaker
 from sqlalchemy.exc import OperationalError
 
@@ -54,6 +54,7 @@ class ScrapedArticle(Base):
     language = Column(String(100))
     keywords = Column(Text)
     full_text = Column(Text)
+    raw_html = Column(Text)
     tags = Column(Text)
     pdf_link = Column(Text)
     image_links = Column(Text)
@@ -218,6 +219,19 @@ def init_postgres_db(verbose: bool = True):
         Base.metadata.create_all(bind=engine)
         if verbose:
             print("[PostgreSQL] Tables initialized successfully.")
+        
+        # Dynamic migration for missing raw_html column
+        try:
+            inspector = inspect(engine)
+            columns = [col['name'] for col in inspector.get_columns('scraped_articles')]
+            if 'raw_html' not in columns:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE scraped_articles ADD COLUMN raw_html TEXT NULL;"))
+                if verbose:
+                    print("[PostgreSQL] Dynamic migration: Added raw_html column to scraped_articles table.")
+        except Exception as mig_err:
+            if verbose:
+                print(f"[PostgreSQL Warning] Dynamic migration for raw_html failed: {mig_err}")
     except Exception as e:
         print(f"[PostgreSQL Error] Failed to generate table structures: {e}")
         raise e
@@ -282,6 +296,7 @@ def export_search_to_postgres(search_id: int, db_session) -> Tuple[int, int]:
             db_article.language = classification["language"]
             db_article.keywords = matched_kws
             db_article.full_text = r.full_content or ""
+            db_article.raw_html = r.raw_html or ""
             db_article.tags = query_keyword
             db_article.pdf_link = r.url if (r.url and r.url.lower().endswith(".pdf")) else ""
             db_article.image_links = r.image_links or ""

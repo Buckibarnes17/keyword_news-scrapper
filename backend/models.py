@@ -24,6 +24,7 @@ class SearchQuery(Base):
     source_type = Column(String, default="search")  # "search" (engine scrape) or "direct" (custom list)
     direct_urls = Column(Text, nullable=True)  # Multiline list of raw URLs/sitemaps
     ignore_robots = Column(Boolean, default=False)
+    proxy_url = Column(Text, nullable=True)
     status = Column(String, default="pending")  # "pending", "processing", "completed", "failed"
     total_urls_found = Column(Integer, default=0)
     total_urls_crawled = Column(Integer, default=0)
@@ -57,8 +58,10 @@ class CrawledURL(Base):
     relevance_score = Column(Float, default=0.0)
     is_duplicate = Column(Boolean, default=False)
     content_hash = Column(String, nullable=True, index=True)
+    simhash = Column(String(16), nullable=True, index=True)
     description = Column(Text, nullable=True)
     full_content = Column(Text, nullable=True)
+    raw_html = Column(Text, nullable=True)
     author = Column(String, nullable=True)
     image_url = Column(Text, nullable=True)
     image_links = Column(Text, nullable=True)

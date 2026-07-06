@@ -9,6 +9,9 @@ from collections import OrderedDict
 from typing import List
 import requests
 from bs4 import BeautifulSoup
+import logging as _log
+
+_logger = _log.getLogger("keywordscout.search_engine")
 
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
@@ -53,15 +56,15 @@ def is_valid_url(url: str) -> bool:
         
     return True
 
-def scrape_duckduckgo(query: str) -> List[str]:
-    """Scrapes DuckDuckGo HTML search page."""
+def scrape_duckduckgo(query: str, proxies: dict = None) -> List[str]:
+    """Scrapes DuckDuckGo HTML search page. Routes through Tor if proxies supplied."""
     urls = []
     headers = get_headers()
     # DuckDuckGo HTML search URL
     search_url = f"https://html.duckduckgo.com/html/?q={urllib.parse.quote(query)}"
     
     try:
-        response = requests.get(search_url, headers=headers, timeout=10)
+        response = requests.get(search_url, headers=headers, timeout=10, proxies=proxies or {})
         if response.status_code == 200:
             soup = BeautifulSoup(response.text, "html.parser")
             # DuckDuckGo HTML returns result links inside class "result__snippet" or "result__url"
@@ -79,18 +82,18 @@ def scrape_duckduckgo(query: str) -> List[str]:
                     if is_valid_url(href):
                         urls.append(href)
     except Exception as e:
-        print(f"Error scraping DuckDuckGo: {e}")
+        _logger.error("DuckDuckGo scrape failed: %s", e)
         
     return urls
 
-def scrape_duckduckgo_lite(query: str) -> List[str]:
-    """Fallback scraping of DuckDuckGo Lite."""
+def scrape_duckduckgo_lite(query: str, proxies: dict = None) -> List[str]:
+    """Fallback scraping of DuckDuckGo Lite. Routes through Tor if proxies supplied."""
     urls = []
     headers = get_headers()
     search_url = "https://lite.duckduckgo.com/lite/"
     data = {"q": query}
     try:
-        response = requests.post(search_url, headers=headers, data=data, timeout=10)
+        response = requests.post(search_url, headers=headers, data=data, timeout=10, proxies=proxies or {})
         if response.status_code == 200:
             soup = BeautifulSoup(response.text, "html.parser")
             # Links in Lite are inside anchor tags with class 'result-link' or within the search results table
@@ -104,17 +107,17 @@ def scrape_duckduckgo_lite(query: str) -> List[str]:
                     if is_valid_url(href):
                         urls.append(href)
     except Exception as e:
-        print(f"Error scraping DuckDuckGo Lite: {e}")
+        _logger.error("DuckDuckGo Lite scrape failed: %s", e)
     return urls
 
-def scrape_bing(query: str) -> List[str]:
-    """Scrapes Bing search results."""
+def scrape_bing(query: str, proxies: dict = None) -> List[str]:
+    """Scrapes Bing search results. Routes through Tor if proxies supplied."""
     urls = []
     headers = get_headers()
     search_url = f"https://www.bing.com/search?q={urllib.parse.quote(query)}"
     
     try:
-        response = requests.get(search_url, headers=headers, timeout=10)
+        response = requests.get(search_url, headers=headers, timeout=10, proxies=proxies or {})
         if response.status_code == 200:
             soup = BeautifulSoup(response.text, "html.parser")
             # Organic results inside <li class="b_algo">
@@ -127,18 +130,18 @@ def scrape_bing(query: str) -> List[str]:
                         if is_valid_url(href):
                             urls.append(href)
     except Exception as e:
-        print(f"Error scraping Bing: {e}")
+        _logger.error("Bing scrape failed: %s", e)
         
     return urls
 
-def scrape_yahoo(query: str) -> List[str]:
-    """Scrapes Yahoo search results."""
+def scrape_yahoo(query: str, proxies: dict = None) -> List[str]:
+    """Scrapes Yahoo search results. Routes through Tor if proxies supplied."""
     urls = []
     headers = get_headers()
     search_url = f"https://search.yahoo.com/search?p={urllib.parse.quote(query)}"
     
     try:
-        response = requests.get(search_url, headers=headers, timeout=10)
+        response = requests.get(search_url, headers=headers, timeout=10, proxies=proxies or {})
         if response.status_code == 200:
             soup = BeautifulSoup(response.text, "html.parser")
             # Yahoo organic results are inside divs with class 'algo' or 'dd algo'
@@ -157,11 +160,11 @@ def scrape_yahoo(query: str) -> List[str]:
                         if is_valid_url(href):
                             urls.append(href)
     except Exception as e:
-        print(f"Error scraping Yahoo: {e}")
+        _logger.error("Yahoo scrape failed: %s", e)
         
     return urls
 
-def scrape_google(query: str) -> List[str]:
+def scrape_google(query: str, proxies: dict = None) -> List[str]:
     """
     [WARNING] Google blocks headless scrapers in virtually all production environments.
     This function remains here with a warning but is commented out of the default engines list.
@@ -172,7 +175,7 @@ def scrape_google(query: str) -> List[str]:
     
     try:
         time.sleep(random.uniform(1.0, 2.5))  # Sleep to avoid quick IP bans
-        response = requests.get(search_url, headers=headers, timeout=10)
+        response = requests.get(search_url, headers=headers, timeout=10, proxies=proxies or {})
         if response.status_code == 200:
             soup = BeautifulSoup(response.text, "html.parser")
             # Organic results inside <div class="g">
@@ -183,7 +186,7 @@ def scrape_google(query: str) -> List[str]:
                     if is_valid_url(href):
                         urls.append(href)
     except Exception as e:
-        print(f"Error scraping Google: {e}")
+        _logger.error("Google scrape failed: %s", e)
         
     return urls
 
@@ -200,12 +203,12 @@ def scrape_duckduckgo_selenium(query: str) -> List[str]:
         from webdriver_manager.chrome import ChromeDriverManager
         from backend.crawler import get_chrome_user_agent_details, patch_chromedriver_if_needed
     except ImportError:
-        print("[WARNING] Selenium not installed, skipping Selenium DDG fallback.")
+        _logger.warning("Selenium not installed, skipping Selenium DDG fallback.")
         return []
 
     driver = None
     try:
-        print(f"[INFO] Initiating Selenium DuckDuckGo scraper for query: '{query}'...")
+        _logger.info("Initiating Selenium DuckDuckGo scraper for query: '%s'...", query)
         chrome_options = Options()
         chrome_options.add_argument("--headless=new")
         chrome_options.add_argument("--window-size=1920,1080")
@@ -250,10 +253,10 @@ def scrape_duckduckgo_selenium(query: str) -> List[str]:
                 
         # Deduplicate
         urls = list(dict.fromkeys(urls))
-        print(f"[SUCCESS] Selenium DuckDuckGo scraper harvested {len(urls)} URLs.")
+        _logger.info("Selenium DuckDuckGo scraper harvested %d URLs.", len(urls))
         
     except Exception as e:
-        print(f"[ERROR] Selenium DuckDuckGo scraper failed: {e}")
+        _logger.error("Selenium DuckDuckGo scraper failed: %s", e)
     finally:
         if driver:
             try:
@@ -263,10 +266,17 @@ def scrape_duckduckgo_selenium(query: str) -> List[str]:
                 
     return urls
 
-def search_web(query: str, max_results: int = 50) -> List[str]:
+def search_web(query: str, max_results: int = 50, tor_proxies: dict = None) -> List[str]:
     """
     Search the web using multiple engines in parallel and aggregate/deduplicate URLs.
     Falls back to Selenium DuckDuckGo scraper if standard HTTP requests are blocked.
+
+    Args:
+        query:       Search query string.
+        max_results: Maximum number of URLs to return.
+        tor_proxies: Optional requests-compatible proxies dict for Tor routing.
+                     When supplied, all engine requests route through Tor SOCKS5.
+                     Pass backend.tor_router.TOR_REQUESTS_PROXIES when Tor is enabled.
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed
     
@@ -282,23 +292,24 @@ def search_web(query: str, max_results: int = 50) -> List[str]:
         scrape_yahoo
     ]
     
-    futures = {}
-    print(f"[INFO] Launching search engine queries in parallel for: '{query}'...")
+    _via = " via Tor SOCKS5" if tor_proxies else ""
+    _logger.info("Launching search engine queries in parallel for: '%s'%s...", query, _via)
     
+    futures = {}
     with ThreadPoolExecutor(max_workers=len(engines)) as executor:
         for engine in engines:
-            future = executor.submit(engine, query)
+            future = executor.submit(engine, query, tor_proxies)
             futures[future] = engine.__name__
             
         for future in as_completed(futures):
             engine_name = futures[future]
             try:
                 results = future.result()
-                print(f"[INFO] Engine {engine_name} returned {len(results)} candidate URLs.")
+                _logger.info("Engine %s returned %d candidate URLs.", engine_name, len(results))
                 for url in results:
                     aggregated_urls[url] = None
             except Exception as e:
-                print(f"[ERROR] Engine {engine_name} failed: {e}")
+                _logger.error("Engine %s failed: %s", engine_name, e)
                 
     # cap results
     final_urls = list(aggregated_urls.keys())[:max_results]
@@ -306,7 +317,7 @@ def search_web(query: str, max_results: int = 50) -> List[str]:
     # If standard HTTP scraping yields 0 results (due to IP blocks/challenges),
     # execute our Selenium DuckDuckGo scraper fallback
     if not final_urls:
-        print("[WARNING] All HTTP search engines returned 0 results. Activating Selenium fallback scraper...")
+        _logger.warning("All HTTP search engines returned 0 results. Activating Selenium fallback scraper...")
         selenium_results = scrape_duckduckgo_selenium(query)
         for url in selenium_results:
             aggregated_urls[url] = None

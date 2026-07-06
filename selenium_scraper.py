@@ -83,6 +83,70 @@ def setup_driver(headless: bool = True) -> webdriver.Chrome:
     
     return driver
 
+def is_error_page(page_source: str, title: str) -> tuple[bool, str]:
+    """
+    Detects if the given page source or title represents an error page.
+    """
+    if not page_source or not page_source.strip():
+        return True, "Empty page source"
+        
+    title_lower = title.lower() if title else ""
+    
+    error_indicators = [
+        ("504 gateway time-out", "504 Gateway Time-out"),
+        ("504 gateway timeout", "504 Gateway Timeout"),
+        ("502 bad gateway", "502 Bad Gateway"),
+        ("503 service unavailable", "503 Service Unavailable"),
+        ("503 service temporarily unavailable", "503 Service Temporarily Unavailable"),
+        ("500 internal server error", "500 Internal Server Error"),
+        ("403 forbidden", "403 Forbidden"),
+        ("404 not found", "404 Not Found"),
+        ("database error", "Database Error"),
+        ("database connection error", "Database Connection Error"),
+        ("error establishing a database connection", "Database Connection Error"),
+        ("site is down", "Site is down"),
+        ("maintenance mode", "Maintenance Mode"),
+        ("access denied", "Access Denied"),
+        ("gateway time-out", "Gateway Time-out"),
+        ("gateway timeout", "Gateway Timeout"),
+        ("bad gateway", "Bad Gateway"),
+    ]
+    
+    for pattern_lower, label in error_indicators:
+        if pattern_lower in title_lower:
+            if len(title_lower) < 120:
+                return True, f"{label} detected in page title: '{title}'"
+                
+    # Clean text
+    from bs4 import BeautifulSoup
+    soup = BeautifulSoup(page_source, "html.parser")
+    for tag in soup(["script", "style", "head", "iframe"]):
+        tag.decompose()
+    body_text = soup.get_text()
+    body_text = " ".join(body_text.split())
+    body_text_lower = body_text.lower()
+    
+    if len(body_text) < 1200:
+        for pattern_lower, label in error_indicators:
+            idx = body_text_lower.find(pattern_lower)
+            if idx != -1 and idx < 120:
+                return True, f"{label} detected in short body text"
+            elif len(body_text) < 250 and pattern_lower in body_text_lower:
+                return True, f"{label} detected in extremely short body text"
+                
+    if "cloudflare" in body_text_lower or "cloudflare" in title_lower:
+        cf_signals = [
+            "ray id", "security check", "ddos protection", "verify you are human",
+            "checking your browser", "enable cookies", "enable javascript",
+            "captcha", "turnstile", "unusual traffic", "browser validation"
+        ]
+        matched_signals = [sig for sig in cf_signals if sig in body_text_lower]
+        if len(matched_signals) >= 2 or (len(body_text) < 1500 and len(matched_signals) >= 1):
+            return True, f"Cloudflare block/challenge page detected (signals: {matched_signals})"
+            
+    return False, ""
+
+
 def check_keywords_in_page(page_source: str, keywords: list) -> bool:
     """Checks if any of the target keywords exist anywhere on the page."""
     source_lower = page_source.lower()
@@ -399,6 +463,11 @@ def scrape_articles(urls: list, keywords: list, headless: bool = True, max_pages
                 try:
                     # Validate Keywords existence in raw page source
                     source = driver.page_source
+                    is_err, reason = is_error_page(source, driver.title)
+                    if is_err:
+                        print(f"[ERROR] Error/Timeout page detected: {reason}")
+                        break
+                        
                     if check_keywords_in_page(source, keywords):
                         print(f"[MATCH] Target keywords found on Page {page_num}!")
                         keyword_found = True

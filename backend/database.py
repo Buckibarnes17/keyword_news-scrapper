@@ -18,7 +18,12 @@ engine = create_engine(
     DATABASE_URL,
     pool_size=10,
     max_overflow=20,
-    pool_recycle=1800
+    pool_recycle=1800,
+    pool_pre_ping=True,       # Test connection liveness before each checkout
+    connect_args={
+        "connect_timeout": 10,          # TCP connect timeout
+        "application_name": "keywordscout",  # Visible in pg_stat_activity
+    }
 )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -78,6 +83,10 @@ def init_db():
             with engine.begin() as conn:
                 conn.execute(text("ALTER TABLE crawled_urls ADD COLUMN full_content TEXT NULL;"))
             print("Database migration: added full_content column to crawled_urls.")
+        if 'raw_html' not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE crawled_urls ADD COLUMN raw_html TEXT NULL;"))
+            print("Database migration: added raw_html column to crawled_urls.")
         if 'author' not in columns:
             with engine.begin() as conn:
                 conn.execute(text("ALTER TABLE crawled_urls ADD COLUMN author VARCHAR(255) NULL;"))
@@ -94,6 +103,10 @@ def init_db():
             with engine.begin() as conn:
                 conn.execute(text("ALTER TABLE crawled_urls ADD COLUMN video_links TEXT NULL;"))
             print("Database migration: added video_links column to crawled_urls.")
+        if 'simhash' not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE crawled_urls ADD COLUMN simhash VARCHAR(16) NULL;"))
+            print("Database migration: added simhash column to crawled_urls.")
             
     if 'search_queries' in inspector.get_table_names():
         columns = [col['name'] for col in inspector.get_columns('search_queries')]
@@ -101,6 +114,10 @@ def init_db():
             with engine.begin() as conn:
                 conn.execute(text("ALTER TABLE search_queries ADD COLUMN ignore_robots BOOLEAN DEFAULT FALSE;"))
             print("Database migration: added ignore_robots column to search_queries.")
+        if 'proxy_url' not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE search_queries ADD COLUMN proxy_url TEXT NULL;"))
+            print("Database migration: added proxy_url column to search_queries.")
 
 def get_db():
     db = SessionLocal()

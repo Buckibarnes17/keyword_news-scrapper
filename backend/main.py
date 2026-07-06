@@ -8,6 +8,28 @@
 
 import os
 import json
+import uuid
+import logging
+import logging.config
+
+logging.config.dictConfig({
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "default": {
+            "format": "%(asctime)s [%(levelname)s] %(name)s — %(message)s",
+            "datefmt": "%Y-%m-%dT%H:%M:%S",
+        }
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "default",
+        }
+    },
+    "root": {"level": "INFO", "handlers": ["console"]},
+})
+logger = logging.getLogger("keywordscout.main")
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Dict
 from fastapi import FastAPI, Depends, HTTPException, Query, Response, Request, Security
@@ -31,7 +53,7 @@ from backend.schemas import (
     ScrapeRequest, FirecrawlResponse
 )
 from backend.queue_manager import start_queue_worker, stop_queue_worker, request_job_stop
-from backend.scheduler import start_scheduler, stop_scheduler
+from backend.scheduler import start_scheduler, stop_scheduler, calculate_next_run
 from backend.exporter import export_results
 
 # Create and migrate database tables on startup
@@ -90,6 +112,18 @@ app = FastAPI(
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
+# Request-ID middleware: stamps every response with X-Request-ID for traceability
+from starlette.middleware.base import BaseHTTPMiddleware
+
+class RequestIDMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        request_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))
+        response = await call_next(request)
+        response.headers["X-Request-ID"] = request_id
+        return response
+
+app.add_middleware(RequestIDMiddleware)
+
 # Enable CORS for development flexibility
 app.add_middleware(
     CORSMiddleware,
@@ -98,6 +132,22 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    logger.exception("Unhandled exception on %s %s", request.method, request.url.path)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": f"Internal server error: {type(exc).__name__}: {str(exc)}"}
+    )
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    logger.warning("Validation error on %s: %s", request.url.path, exc.errors())
+    return JSONResponse(status_code=422, content={"detail": exc.errors()})
 
 # REST APIs
 
@@ -111,12 +161,18 @@ def create_search(request: Request, payload: SearchQueryCreate, db: Session = De
     domains_str = json.dumps(payload.domains_filter) if payload.domains_filter else None
     languages_str = json.dumps(payload.languages_filter) if payload.languages_filter else None
 
-    # Handle direct input checks
-    if payload.source_type == "direct" and not payload.direct_urls:
-        raise HTTPException(status_code=400, detail="direct_urls field is required when source_type is 'direct'")
+    # Handle direct input checks and validation
+    kw_clean = (payload.keyword or "").strip()
+    
+    if payload.source_type == "search" and not kw_clean:
+        raise HTTPException(status_code=400, detail="keyword is required when source_type is 'search'")
+        
+    if payload.source_type == "direct":
+        if not payload.direct_urls or not payload.direct_urls.strip():
+            raise HTTPException(status_code=400, detail="direct_urls field is required when source_type is 'direct'")
 
     new_query = SearchQuery(
-        keyword=payload.keyword,
+        keyword=kw_clean,
         match_type=payload.match_type,
         case_sensitive=payload.case_sensitive,
         exact_match=payload.exact_match,
@@ -128,6 +184,7 @@ def create_search(request: Request, payload: SearchQueryCreate, db: Session = De
         source_type=payload.source_type,
         direct_urls=payload.direct_urls,
         ignore_robots=payload.ignore_robots,
+        proxy_url=payload.proxy_url,          # NEW
         status="pending"
     )
     
@@ -135,6 +192,44 @@ def create_search(request: Request, payload: SearchQueryCreate, db: Session = De
     db.commit()
     db.refresh(new_query)
     return new_query
+
+@app.get("/api/tor/status")
+def get_tor_status():
+    """
+    Checks whether the local Tor SOCKS5 proxy is reachable on 127.0.0.1:9050.
+    Called by the frontend toggle pre-flight check before launching a Tor job.
+
+    Returns:
+        200 always — the JSON body contains the reachability result.
+        {"reachable": true,  "message": "...", "proxy_url": "socks5h://127.0.0.1:9050"}
+        {"reachable": false, "message": "Tor SOCKS5 proxy is NOT running ...", "proxy_url": null}
+    """
+    from backend.tor_router import check_tor_reachability, TOR_SOCKS5_URL
+    result = check_tor_reachability()
+    return {
+        **result,
+        "proxy_url": TOR_SOCKS5_URL if result["reachable"] else None,
+        "tor_port": 9050,
+        "tor_host": "127.0.0.1"
+    }
+
+@app.get("/api/health")
+def health_check(db: Session = Depends(get_db)):
+    """Returns system health: DB connectivity and worker status."""
+    from backend.queue_manager import _worker_thread
+    from sqlalchemy import text
+    db_ok = False
+    try:
+        db.execute(text("SELECT 1"))
+        db_ok = True
+    except Exception as e:
+        logger.error("DB health check failed: %s", e)
+    return {
+        "status": "ok" if db_ok else "degraded",
+        "db": "connected" if db_ok else "disconnected",
+        "queue_worker": "running" if (_worker_thread and _worker_thread.is_alive()) else "stopped",
+        "version": "2.0"
+    }
 
 @app.get("/api/history", response_model=List[SearchQueryResponse])
 @limiter.limit("30/minute")
@@ -167,11 +262,10 @@ def stop_search(request: Request, search_id: int, db: Session = Depends(get_db),
 
     request_job_stop(search_id)
 
-    # If the job is pending, we can directly set its status to aborted
-    if query.status == "pending":
-        query.status = "aborted"
-        query.updated_at = datetime.now(timezone.utc)
-        db.commit()
+    # Set status to aborted immediately in the DB to reflect in UI instantly
+    query.status = "aborted"
+    query.updated_at = datetime.now(timezone.utc)
+    db.commit()
         
     return {"message": f"Stop signal sent to search run {search_id}."}
 
@@ -226,6 +320,7 @@ def _serialize_crawled_url(url_obj) -> dict:
         "is_duplicate": bool(url_obj.is_duplicate),
         "description": url_obj.description or "",
         "full_content": url_obj.full_content or "",
+        "raw_html": url_obj.raw_html or "",
         "author": url_obj.author or "Unknown",
         "image_url": url_obj.image_url,
         "discovered_at": url_obj.discovered_at.isoformat() if url_obj.discovered_at else None,
@@ -301,12 +396,32 @@ def get_search_results(
 
 @app.get("/api/export/{search_id}")
 @limiter.limit("30/minute")
-def export_search(request: Request, search_id: int, format: str = Query("csv"), db: Session = Depends(get_db), token: str = Depends(verify_token)):
+def export_search(
+    request: Request,
+    search_id: int,
+    format: str = Query("csv"),
+    q: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
+    exclude_duplicates: bool = Query(True),
+    sort_by: Optional[str] = Query(None),
+    sort_desc: bool = Query(True),
+    db: Session = Depends(get_db),
+    token: str = Depends(verify_token)
+):
     """
     Generates and streams an export file (CSV, XLSX, JSON, Parquet) for a search.
     """
     try:
-        data_bytes, media_type = export_results(search_id, format, db)
+        data_bytes, media_type = export_results(
+            search_id,
+            format,
+            db,
+            q=q,
+            status=status,
+            exclude_duplicates=exclude_duplicates,
+            sort_by=sort_by,
+            sort_desc=sort_desc
+        )
     except ValueError as ve:
         raise HTTPException(status_code=400, detail=str(ve))
     except Exception as e:
@@ -342,22 +457,35 @@ def export_search_postgres(request: Request, search_id: int, db: Session = Depen
 @limiter.limit("10/minute")
 def create_schedule(request: Request, payload: SearchScheduleCreate, db: Session = Depends(get_db), token: str = Depends(verify_token)):
     """Creates a new recurring keyword search schedule."""
+    # Clean keyword
+    kw_clean = (payload.keyword or "").strip()
+    payload.keyword = kw_clean
+    payload.config.keyword = (payload.config.keyword or "").strip()
+
+    # Validate config mode parameters
+    if payload.config.source_type == "search" and not payload.config.keyword:
+        raise HTTPException(status_code=400, detail="keyword is required for web search schedule mode")
+        
+    if payload.config.source_type == "direct":
+        if not payload.config.direct_urls or not payload.config.direct_urls.strip():
+            raise HTTPException(status_code=400, detail="direct_urls field is required for direct URL schedule mode")
+
     # Check frequency
     if payload.frequency not in ("daily", "weekly", "monthly"):
         raise HTTPException(status_code=400, detail="Frequency must be one of: daily, weekly, monthly")
 
     # Set initial next_run time
-    now = datetime.now(timezone.utc)
-    next_run = now
-    if payload.frequency == "daily":
-        next_run = now + timedelta(days=1)
-    elif payload.frequency == "weekly":
-        next_run = now + timedelta(weeks=1)
-    elif payload.frequency == "monthly":
-        next_run = now + timedelta(days=30)
+    if payload.next_run:
+        next_run = payload.next_run
+        if next_run.tzinfo is None:
+            next_run = next_run.replace(tzinfo=timezone.utc)
+    else:
+        # Fallback to backend calculation based on the config
+        config_dict = payload.config.dict()
+        next_run = calculate_next_run(payload.frequency, config_dict, datetime.now(timezone.utc))
 
     new_sched = SearchSchedule(
-        keyword=payload.keyword,
+        keyword=kw_clean,
         frequency=payload.frequency,
         active=True,
         engine=payload.engine or "fast",
@@ -397,7 +525,7 @@ def scrape_url(request: Request, payload: ScrapeRequest, token: str = Depends(ve
     from backend.crawler import Crawler
     from backend.firecrawl_converter import convert_html_to_firecrawl_schema
 
-    crawler = Crawler()
+    crawler = Crawler(proxy_url=payload.proxy_url)
     try:
         html_content = crawler.fetch_page(
             payload.url,
@@ -430,7 +558,7 @@ def get_crawled_url_as_firecrawl(request: Request, url_id: int, db: Session = De
         "success": True,
         "data": {
             "markdown": crawled_url.full_content or "",
-            "html": "",
+            "html": crawled_url.raw_html or "",
             "metadata": {
                 "title": crawled_url.title or "Untitled",
                 "description": crawled_url.description or "",

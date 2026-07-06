@@ -136,3 +136,6 @@ keyword_scraper.db*
 
 # Log files
 *.log
+
+# Tor binaries and downloaded artifacts
+backend/tor/

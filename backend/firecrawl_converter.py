@@ -1,7 +1,16 @@
+# ## Changes (Trafilatura Integration — KeywordScout v2.0 Upgrade)
+# - Added configurable extraction quality thresholds (MIN_EXTRACTED_SIZE and MIN_RETENTION_RATIO).
+# - Updated convert_html_to_firecrawl_schema to use Trafilatura for markdown if validation holds.
+
 import re
 import urllib.parse
+import os
 from typing import Dict, Any, List, Set, Tuple
 from bs4 import BeautifulSoup, Comment, NavigableString
+
+# Extraction quality thresholds (override via environment variables)
+MIN_EXTRACTED_SIZE = int(os.environ.get("KS_MIN_EXTRACTED_SIZE", "200"))   # min chars for valid extraction
+MIN_RETENTION_RATIO = float(os.environ.get("KS_MIN_RETENTION_RATIO", "0.95"))  # existing threshold
 
 # Regex patterns that indicate related articles, comments, or other sections that come after the main article
 STOP_PATTERNS = [
@@ -84,21 +93,53 @@ def score_dom_element(element) -> float:
 def extract_primary_content_container(soup: BeautifulSoup):
     """
     Finds the DOM element with the highest content density score.
-    Returns the element if it meets baseline criteria, otherwise returns the full body.
+    Applies hierarchical pruning to reject wrapper elements that contain high-density sub-elements,
+    ensuring we isolate the actual article text container and exclude sidebars/menus.
     """
-    best_element = None
-    best_score = -9999.0
-
+    candidates = []
     # Search candidates: div, section, article, main
     for element in soup.find_all(["div", "section", "article", "main"]):
         score = score_dom_element(element)
-        if score > best_score:
-            best_score = score
-            best_element = element
+        if score > 100.0:
+            candidates.append((element, score))
 
-    if best_element and best_score > 100.0:
-        return best_element
-    
+    if not candidates:
+        return soup.find("body") or soup
+
+    # Sort candidates by score descending
+    candidates.sort(key=lambda x: x[1], reverse=True)
+
+    # Pruning: If a candidate A contains a descendant candidate B where B has at least 85% of A's paragraph tags,
+    # then A is likely just a wrapper container. We should prefer B.
+    for i in range(len(candidates)):
+        el_a, score_a = candidates[i]
+        if el_a is None:
+            continue
+        p_a = len(el_a.find_all("p"))
+        if p_a == 0:
+            continue
+            
+        # Find if there's any descendant candidate B
+        for j in range(len(candidates)):
+            if i == j:
+                continue
+            el_b, score_b = candidates[j]
+            if el_b is None:
+                continue
+                
+            # Check if el_b is a descendant of el_a
+            if any(el_b is desc for desc in el_a.descendants):
+                p_b = len(el_b.find_all("p"))
+                if p_b >= 0.85 * p_a:
+                    candidates[i] = (None, 0.0)
+                    break
+
+    # Filter out pruned candidates
+    valid_candidates = [c for c in candidates if c[0] is not None]
+    if valid_candidates:
+        valid_candidates.sort(key=lambda x: x[1], reverse=True)
+        return valid_candidates[0][0]
+        
     return soup.find("body") or soup
 
 def apply_stop_patterns(t_soup):
@@ -409,19 +450,20 @@ def parse_structured_content(cleaned_element, base_url: str = "") -> Dict[str, L
         "quotes": quotes
     }
 
-def convert_html_to_firecrawl_schema(html: str, url: str, status_code: int = 200) -> Dict[str, Any]:
+def convert_html_to_firecrawl_schema(html: str, url: str, status_code: int = 200, soup=None) -> Dict[str, Any]:
     """
     Parses raw HTML, filters boilerplate content, converts it into Clean Markdown,
     extracts metadata, resolves and structures separate images, videos, and links.
     """
-    soup = BeautifulSoup(html, "html.parser")
+    soup = soup or BeautifulSoup(html, "html.parser")
 
+    # BUGFIX: BeautifulSoup tag.get() can return None if the attribute is present but has no value. We change tag.get("attr", "") to (tag.get("attr") or "") before calling .strip() to prevent AttributeError.
     # 1. Metadata Extraction
     title_tag = soup.find("title")
     title = title_tag.get_text().strip() if title_tag else ""
     if not title:
         og_title = soup.find("meta", attrs={"property": "og:title"})
-        title = og_title.get("content", "").strip() if og_title else ""
+        title = (og_title.get("content") or "").strip() if og_title else ""
     if not title:
         h1_tag = soup.find("h1")
         title = h1_tag.get_text().strip() if h1_tag else ""
@@ -430,7 +472,7 @@ def convert_html_to_firecrawl_schema(html: str, url: str, status_code: int = 200
     title = strip_raw_html_tags(title)
 
     desc_meta = soup.find("meta", attrs={"name": "description"}) or soup.find("meta", attrs={"property": "og:description"})
-    description = desc_meta.get("content", "").strip() if desc_meta else ""
+    description = (desc_meta.get("content") or "").strip() if desc_meta else ""
     description = strip_raw_html_tags(description)
 
     html_tag = soup.find("html")
@@ -441,13 +483,13 @@ def convert_html_to_firecrawl_schema(html: str, url: str, status_code: int = 200
     seen_links: Set[Tuple[str, str, str]] = set()
 
     for a in soup.find_all("a"):
-        href = a.get("href", "").strip()
+        href = (a.get("href") or "").strip()
         if href and not href.startswith(("javascript:", "mailto:", "tel:", "#")):
             absolute_href = urllib.parse.urljoin(url, href)
             text = a.get_text().strip()
             text = re.sub(r'\s+', ' ', text)
             text = strip_raw_html_tags(text)
-            title_attr = a.get("title", "").strip()
+            title_attr = (a.get("title") or "").strip()
             title_attr = strip_raw_html_tags(title_attr)
             
             key = (absolute_href, text, title_attr)
@@ -463,12 +505,12 @@ def convert_html_to_firecrawl_schema(html: str, url: str, status_code: int = 200
     seen_images: Set[str] = set()
 
     for img in soup.find_all("img"):
-        src = img.get("src", "").strip()
+        src = (img.get("src") or "").strip()
         if src:
             absolute_src = urllib.parse.urljoin(url, src)
             if absolute_src not in seen_images:
                 seen_images.add(absolute_src)
-                alt = img.get("alt", "").strip()
+                alt = (img.get("alt") or "").strip()
                 alt = strip_raw_html_tags(alt)
                 
                 caption = ""
@@ -483,7 +525,7 @@ def convert_html_to_firecrawl_schema(html: str, url: str, status_code: int = 200
                         caption = figcaption.get_text().strip()
                             
                 if not caption:
-                    caption = img.get("title", "").strip() or img.get("caption", "").strip()
+                    caption = (img.get("title") or "").strip() or (img.get("caption") or "").strip()
                 caption = strip_raw_html_tags(caption)
                             
                 width = parse_dimension(img.get("width"))
@@ -502,20 +544,20 @@ def convert_html_to_firecrawl_schema(html: str, url: str, status_code: int = 200
 
     # HTML5 video tags
     for video in soup.find_all("video"):
-        src = video.get("src", "").strip()
+        src = (video.get("src") or "").strip()
         v_type = "html5"
         if not src:
             source_tag = video.find("source")
             if source_tag:
-                src = source_tag.get("src", "").strip()
-                v_type = source_tag.get("type", "").strip() or "html5"
+                src = (source_tag.get("src") or "").strip()
+                v_type = (source_tag.get("type") or "").strip() or "html5"
         if src:
             abs_src = urllib.parse.urljoin(url, src)
             if abs_src not in seen_videos:
                 seen_videos.add(abs_src)
-                v_title = video.get("title", "").strip() or video.get("name", "").strip() or ""
+                v_title = (video.get("title") or "").strip() or (video.get("name") or "").strip() or ""
                 v_title = strip_raw_html_tags(v_title)
-                thumbnail = video.get("poster", "").strip()
+                thumbnail = (video.get("poster") or "").strip()
                 if thumbnail:
                     thumbnail = urllib.parse.urljoin(url, thumbnail)
                 videos_list.append({
@@ -527,10 +569,10 @@ def convert_html_to_firecrawl_schema(html: str, url: str, status_code: int = 200
 
     # Video Embeds (YouTube, Vimeo, Loom, Wistia, Brightcove, iframe video providers)
     for iframe in soup.find_all(["iframe", "embed", "object"]):
-        src = iframe.get("src", "").strip() or iframe.get("data", "").strip()
+        src = (iframe.get("src") or "").strip() or (iframe.get("data") or "").strip()
         if src:
             abs_src = urllib.parse.urljoin(url, src)
-            v_title = iframe.get("title", "").strip() or ""
+            v_title = (iframe.get("title") or "").strip() or ""
             v_title = strip_raw_html_tags(v_title)
             
             lower_src = abs_src.lower()
@@ -581,16 +623,34 @@ def convert_html_to_firecrawl_schema(html: str, url: str, status_code: int = 200
     print(f"   - Cleaned text content length: {cleaned_text_len} chars")
     print(f"   - Computed content retention: {retention_ratio:.2%}")
 
-    if retention_ratio < 0.95:
-        print("   - [WARNING] Content retention falls below 95% threshold. Rolling back to safe minimal cleaning.")
+    if retention_ratio < MIN_RETENTION_RATIO:
+        print(f"   - [WARNING] Content retention falls below {MIN_RETENTION_RATIO:.2%} threshold. Rolling back to safe minimal cleaning.")
         cleaned_container = safe_clean_element(primary_container)
         fallback_len = get_meaningful_text_length(cleaned_container)
         fallback_ratio = fallback_len / original_text_len if original_text_len > 0 else 1.0
         print(f"   - Post-rollback content retention: {fallback_ratio:.2%}")
 
-    # Convert to markdown
-    raw_markdown = html_to_markdown(cleaned_container, base_url=url)
-    clean_markdown = normalize_whitespace(raw_markdown)
+    # Try Trafilatura for Markdown output
+    trafilatura_markdown = None
+    try:
+        import trafilatura
+        trafilatura_markdown = trafilatura.extract(
+            html,
+            output_format="markdown",
+            include_comments=False,
+            include_tables=True,
+            no_fallback=False,
+            favor_recall=True,
+        )
+    except Exception:
+        pass
+
+    # Use Trafilatura markdown if it meets minimum length, else fall back to existing html_to_markdown()
+    if trafilatura_markdown and len(trafilatura_markdown.strip()) >= MIN_EXTRACTED_SIZE:
+        clean_markdown = trafilatura_markdown.strip()
+    else:
+        raw_markdown = html_to_markdown(cleaned_container, base_url=url)
+        clean_markdown = normalize_whitespace(raw_markdown)
 
     # 4. Parse Structured Content
     structured_content = parse_structured_content(cleaned_container, base_url=url)

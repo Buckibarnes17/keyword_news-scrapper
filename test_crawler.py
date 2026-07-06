@@ -139,7 +139,15 @@ def run_tests():
         language=analysis_phrase["language"],
         status="matched",
         relevance_score=analysis_phrase["relevance_score"],
-        is_duplicate=False
+        is_duplicate=False,
+        full_content=analysis_phrase.get("full_content"),
+        raw_html=analysis_phrase.get("raw_html"),
+        description=analysis_phrase.get("description", ""),
+        author=analysis_phrase.get("author", "Unknown"),
+        image_url=analysis_phrase.get("image_url"),
+        image_links=analysis_phrase.get("image_links"),
+        video_links=analysis_phrase.get("video_links"),
+        matched_keywords=analysis_phrase.get("matched_keywords")
     )
     db.add(mock_url)
     db.commit()
@@ -338,9 +346,143 @@ def run_tests():
         print(f"   [FAIL] Firecrawl Normalization Layer tests failed: {e}")
         raise e
 
-    # Clean up mock items
+    # 10. Testing Trafilatura and SimHash Integrations
+    print("\n10. Testing Trafilatura and SimHash Integrations...")
+    
+    # 10a. Trafilatura Extraction & Fallback test
+    print("   Testing Trafilatura body extraction...")
+    rich_news_html = """
+    <html>
+      <body>
+        <article>
+          <h1>Breaking News: Trafilatura Integration Successful</h1>
+          <p>KeywordScout has successfully integrated Trafilatura as its primary extraction engine. 
+             This makes it extremely robust at extracting visible human-readable text from news articles, 
+             blogs, and other web pages. We will ensure that our downstream search query logic runs perfectly.
+             This paragraph has enough characters to exceed the extraction minimum character limit threshold of 200 characters easily.</p>
+          <p>By using multiple advanced algorithms under the hood, we can achieve high recall and precision,
+             while preserving full content for Boolean keyword matcher logic. This is the second paragraph of our mock news article.</p>
+        </article>
+      </body>
+    </html>
+    """
+    soup_news = import_soup(rich_news_html)
+    cleaned_txt = crawler.clean_html_content(soup_news, html_content=rich_news_html)
+    print(f"   * Extracted length: {len(cleaned_txt)} chars")
+    assert len(cleaned_txt) >= 200, "Should extract more than 200 chars"
+    assert "Trafilatura" in cleaned_txt, "Should contain the main keyword"
+    
+    print("   Testing BS4 Fallback on malformed HTML...")
+    fallback_txt = crawler.clean_html_content(import_soup("<p>Too short</p>"), html_content="<p>Too short</p>")
+    print(f"   * Fallback text: '{fallback_txt.strip()}'")
+    assert len(fallback_txt) > 0, "Fallback should still yield text"
 
+    # 10b. SimHash test
+    print("   Testing SimHash Engine...")
+    from backend.simhash_dedup import compute_simhash, is_near_duplicate
+    hash1 = compute_simhash("The quick brown fox jumps over the lazy dog and runs away happily.")
+    hash2 = compute_simhash("The quick brown fox jumps over the lazy dog and runs away happily!")
+    hash3 = compute_simhash("A completely different text that has absolutely nothing in common with the quick brown fox.")
+    print(f"   * Hash 1: '{hash1}'")
+    print(f"   * Hash 2: '{hash2}'")
+    print(f"   * Hash 3: '{hash3}'")
+    assert hash1 != "", "Should return valid hex hash"
+    assert is_near_duplicate(hash1, hash2) is True, "Nearly identical texts should be near-duplicates"
+    assert is_near_duplicate(hash1, hash3) is False, "Completely different texts should not be near-duplicates"
+    print("   [SUCCESS] SimHash checks passed.")
+
+    # 10c. Sitemap/Feed Discovery test
+    print("   Testing Sitemap & Feed Discovery (best effort)...")
+    from backend.sitemap_discovery import discover_from_sitemap, discover_from_feeds
+    try:
+        urls_sm = discover_from_sitemap("https://example.com")
+        print(f"   * Discovered sitemap URLs count: {len(urls_sm)}")
+        assert isinstance(urls_sm, list)
+    except Exception as e:
+        print(f"   [WARNING] discover_from_sitemap failed (expected if offline/restricted): {e}")
+
+    try:
+        urls_feed = discover_from_feeds("https://example.com")
+        print(f"   * Discovered feed URLs count: {len(urls_feed)}")
+        assert isinstance(urls_feed, list)
+    except Exception as e:
+        print(f"   [WARNING] discover_from_feeds failed: {e}")
+
+    # 10d. Metadata enrichment test
+    print("   Testing Metadata enrichment via JSON-LD...")
+    json_ld_html = """
+    <html>
+      <head>
+        <title>Original Title</title>
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@type": "NewsArticle",
+          "headline": "Enriched Headline via Trafilatura",
+          "datePublished": "2026-06-20",
+          "author": {
+            "@type": "Person",
+            "name": "Jane Doe"
+          }
+        }
+        </script>
+      </head>
+      <body>
+        <p>This is the body content containing some useful details about the test.</p>
+      </body>
+    </html>
+    """
+    enriched_analysis = crawler.analyze_page(
+        html_content=json_ld_html,
+        url="https://example.com/enriched",
+        keyword="",
+        match_type="phrase"
+    )
+    print(f"   * Enriched Author: '{enriched_analysis['author']}'")
+    print(f"   * Enriched Date: '{enriched_analysis['discovered_at']}'")
+    assert enriched_analysis["author"] == "Jane Doe", "Author should be Jane Doe"
+    print("   [SUCCESS] Metadata enrichment checks passed.")
+
+    # 10e. Language detection test
+    print("   Testing Language Detection Upgrade...")
+    french_text = """
+    Ceci est un paragraphe écrit en français pour tester la détection de la langue.
+    Nous espérons que le système reconnaîtra correctement que le texte est en français.
+    Le moteur Trafilatura ou py3langid devrait classifier ce texte avec un score de confiance élevé.
+    """
+    french_html = f"<html><body><p>{french_text}</p></body></html>"
+    detected_lang = crawler.detect_language(import_soup(french_html), body_text=french_text)
+    print(f"   * Detected language: '{detected_lang}'")
+    assert detected_lang == "fr", f"Language should be fr, got {detected_lang}"
+    print("   [SUCCESS] Language detection checks passed.")
+
+    # 11. Run Proxy and Charset Decoding Tests
+    print("\n11. Testing Proxy Isolation & Charset Decoding...")
+    test_no_proxy_session_unchanged()
+    test_empty_string_proxy_treated_as_none()
+    test_http_proxy_configures_session()
+    test_socks5h_proxy_configures_session()
+    test_utf8_site_uses_fast_path()
+    test_gb2312_content_type_decoded_correctly()
+    test_gbk_meta_charset_decoded_correctly()
+    test_non_cn_latin1_site_uses_fallback()
+    print("   [SUCCESS] Proxy & Charset decoding tests passed.")
+
+    # 12. Run Error Page Detection Tests
+    print("\n12. Testing Error and Cloudflare Page Detection...")
+    test_error_page_detection()
+    print("   [SUCCESS] Error page detection tests passed.")
+
+    # 13. Run Default Date Filtering Tests
+    print("\n13. Testing Default Date Filtering (3 Months limit)...")
+    test_default_date_filter()
+    print("   [SUCCESS] Default date filtering tests passed.")
+
+
+
+    # Clean up mock items
     db.delete(mock_url)
+
     db.delete(mock_query)
     db.commit()
     db.close()
@@ -350,6 +492,253 @@ def run_tests():
 def import_soup(html):
     from bs4 import BeautifulSoup
     return BeautifulSoup(html, "html.parser")
+
+from unittest.mock import patch, MagicMock
+
+# ── Proxy isolation tests ─────────────────────────────────────────────────────
+
+def test_no_proxy_session_unchanged():
+    """Jobs without proxy_url must have empty session.proxies and en-US Accept-Language."""
+    c = Crawler()
+    assert c.proxy_url is None
+    assert not c.session.proxies  # must be empty
+    assert "en-US" in c.session.headers.get("Accept-Language", "")
+    assert "zh-CN" not in c.session.headers.get("Accept-Language", "")
+
+def test_empty_string_proxy_treated_as_none():
+    """Empty string proxy_url must behave identically to None."""
+    c = Crawler(proxy_url="")
+    assert c.proxy_url is None
+    assert not c.session.proxies
+
+def test_http_proxy_configures_session():
+    c = Crawler(proxy_url="http://127.0.0.1:8080")
+    assert c.session.proxies["http"] == "http://127.0.0.1:8080"
+    assert c.session.proxies["https"] == "http://127.0.0.1:8080"
+    assert "zh-CN" in c.session.headers.get("Accept-Language", "")
+
+def test_socks5h_proxy_configures_session():
+    c = Crawler(proxy_url="socks5h://127.0.0.1:1080")
+    assert c.session.proxies["http"] == "socks5h://127.0.0.1:1080"
+    assert c.session.proxies["https"] == "socks5h://127.0.0.1:1080"
+
+# ── Charset decoding tests ────────────────────────────────────────────────────
+
+def _mock_response(content: bytes, content_type: str, encoding: str = None):
+    mock = MagicMock()
+    mock.content = content
+    mock.headers = {"Content-Type": content_type}
+    mock.encoding = encoding
+    mock.raise_for_status = lambda: None
+    # Simulate requests' response.text behaviour
+    mock.text = content.decode(encoding or "utf-8", errors="replace")
+    return mock
+
+def test_utf8_site_uses_fast_path():
+    """UTF-8 sites must return response.text without entering charset scan logic."""
+    c = Crawler()
+    body = "<html><body>Hello World</body></html>"
+    mock = _mock_response(body.encode("utf-8"), "text/html; charset=utf-8", "utf-8")
+    with patch.object(c.session, "get", return_value=mock):
+        result = c._fetch_http("https://bbc.com/")
+    assert "Hello World" in result
+
+def test_gb2312_content_type_decoded_correctly():
+    """Pages declaring charset=gb2312 in Content-Type must return correct Chinese text."""
+    c = Crawler()
+    chinese = "新华网新闻"
+    mock = _mock_response(chinese.encode("gb18030"), "text/html; charset=gb2312", "gb2312")
+    with patch.object(c.session, "get", return_value=mock):
+        result = c._fetch_http("https://xinhuanet.com/article")
+    assert chinese in result
+
+def test_gbk_meta_charset_decoded_correctly():
+    """Pages declaring GBK in <meta charset> but not in Content-Type must decode correctly."""
+    c = Crawler()
+    chinese = "人民日报"
+    html = f'<html><head><meta charset="GBK"></head><body>{chinese}</body></html>'.encode("gbk")
+    mock = _mock_response(html, "text/html", None)
+    mock.encoding = None
+    # Simulate requests returning latin-1 text (the mojibake case)
+    mock.text = html.decode("latin-1", errors="replace")
+    with patch.object(c.session, "get", return_value=mock):
+        result = c._fetch_http("https://people.com.cn/article")
+    assert chinese in result
+
+def test_non_cn_latin1_site_uses_fallback():
+    """A site that gets latin-1 detection but has no CN charset meta should use response.text."""
+    c = Crawler()
+    body = b"<html><body>Bonjour le monde</body></html>"
+    mock = _mock_response(body, "text/html", "iso-8859-1")
+    mock.text = body.decode("iso-8859-1")
+    with patch.object(c.session, "get", return_value=mock):
+        result = c._fetch_http("https://lemonde.fr/article")
+    assert "Bonjour le monde" in result
+
+
+def test_error_page_detection():
+    """Verify that is_error_page correctly identifies various error and Cloudflare pages, and allows normal pages."""
+    c = Crawler()
+    
+    # 1. 504 Gateway time-out in title
+    html_504 = "<html><head><title>mizzima.com | 504: Gateway time-out</title></head><body>Server timeout</body></html>"
+    is_err, reason = c.is_error_page(html_504)
+    assert is_err is True
+    assert "504 Gateway" in reason or "504: Gateway" in reason
+    
+    # 2. 502 Bad Gateway in short body text
+    html_502 = "<html><head><title>Error</title></head><body><h1>502 Bad Gateway</h1></body></html>"
+    is_err, reason = c.is_error_page(html_502)
+    assert is_err is True
+    assert "502 Bad Gateway" in reason
+    
+    # 3. Cloudflare challenge/block page detection
+    html_cloudflare = """
+    <html>
+      <head><title>Please Wait... | Cloudflare</title></head>
+      <body>
+        <h1>Checking your browser before accessing the website.</h1>
+        <p>This process is automatic. Your browser will redirect shortly.</p>
+        <p>Cloudflare Ray ID: 7abc123456789def</p>
+      </body>
+    </html>
+    """
+    is_err, reason = c.is_error_page(html_cloudflare)
+    assert is_err is True
+    assert "Cloudflare" in reason
+    
+    # 4. Normal article containing a keyword (no false positive)
+    html_normal = """
+    <html>
+      <head><title>How to handle web development</title></head>
+      <body>
+        <h1>Web Development Guidelines</h1>
+        <p>In this article, we explain how to build scalable python web servers. We will discuss load balancing, CDN configuration, and database indexing. This article is very long and has lots of words about development.</p>
+        <p>Some people experience 504 Gateway timeouts when their server is slow, but we can fix this by optimizing database queries and increasing timeout limits in nginx.</p>
+      </body>
+    </html>
+    """
+    is_err, reason = c.is_error_page(html_normal)
+    assert is_err is False, f"Expected normal page to be allowed, but got: {reason}"
+
+
+def test_default_date_filter():
+    """Verify that crawl_url_task defaults date filtering to 3 months if not specified, and respects custom dates."""
+    from unittest.mock import patch, MagicMock
+    from datetime import datetime, timedelta, timezone
+    from backend.queue_manager import crawl_url_task
+    
+    mock_db = MagicMock()
+    
+    mock_crawled_url1 = MagicMock()
+    mock_crawled_url1.url = "https://example.com/old"
+    mock_crawled_url1.domain = "example.com"
+    
+    mock_crawled_url2 = MagicMock()
+    mock_crawled_url2.url = "https://example.com/new"
+    mock_crawled_url2.domain = "example.com"
+    
+    mock_crawled_url3 = MagicMock()
+    mock_crawled_url3.url = "https://example.com/old_but_allowed"
+    mock_crawled_url3.domain = "example.com"
+    
+    mock_filter1 = MagicMock()
+    mock_filter1.first.return_value = mock_crawled_url1
+    mock_filter2 = MagicMock()
+    mock_filter2.first.return_value = mock_crawled_url2
+    mock_filter3 = MagicMock()
+    mock_filter3.first.return_value = mock_crawled_url3
+    
+    mock_db.query.return_value.filter.side_effect = [mock_filter1, mock_filter2, mock_filter3]
+    
+    # 1. Test case: No start date implied (defaults to 90 days ago)
+    # Article date is 100 days ago (should be skipped)
+    date_100_days_ago = datetime.now(timezone.utc) - timedelta(days=100)
+    mock_analysis_old = {
+        "matched": True,
+        "discovered_at": date_100_days_ago,
+        "language": "en",
+        "title": "Old Article",
+        "snippet": "Old content",
+        "occurrences": 1,
+        "found_in_title": False,
+        "found_in_description": False,
+        "found_in_body": True,
+        "found_in_url": False,
+        "domain": "example.com",
+        "content_hash": "hash_old",
+        "description": "desc",
+        "full_content": "full content",
+        "raw_html": "html",
+        "author": "Unknown",
+        "simhash": "simhash_old",
+        "image_url": "",
+        "image_links": "[]",
+        "video_links": "[]",
+        "relevance_score": 50.0
+    }
+    
+    # Article date is 10 days ago (should be matched, not skipped)
+    date_10_days_ago = datetime.now(timezone.utc) - timedelta(days=10)
+    mock_analysis_new = mock_analysis_old.copy()
+    mock_analysis_new["discovered_at"] = date_10_days_ago
+    mock_analysis_new["title"] = "New Article"
+    mock_analysis_new["content_hash"] = "hash_new"
+    
+    with patch("backend.queue_manager.SessionLocal", return_value=mock_db), \
+         patch("backend.queue_manager.Crawler") as mock_crawler_cls:
+         
+        mock_crawler = mock_crawler_cls.return_value
+        mock_crawler.fetch_page.return_value = "<html>Mock HTML</html>"
+        
+        # Test old article (100 days ago) - should be skipped
+        mock_crawler.analyze_page.return_value = mock_analysis_old
+        url_id, result = crawl_url_task(
+            url_id=1,
+            search_id=1,
+            keyword="test",
+            match_type="phrase",
+            case_sensitive=False,
+            exact_match=False,
+            engine="fast",
+            ignore_robots=True,
+            date_range_start=None
+        )
+        assert result["status"] == "skipped", f"Expected skipped, got {result['status']}"
+        assert "before date_range_start" in result["error_message"]
+        
+        # Test new article (10 days ago) - should be matched
+        mock_crawler.analyze_page.return_value = mock_analysis_new
+        url_id, result = crawl_url_task(
+            url_id=2,
+            search_id=1,
+            keyword="test",
+            match_type="phrase",
+            case_sensitive=False,
+            exact_match=False,
+            engine="fast",
+            ignore_robots=True,
+            date_range_start=None
+        )
+        assert result["status"] == "matched", f"Expected matched, got {result['status']}"
+        
+        # Test old article (100 days ago) with explicit date_range_start of 120 days ago - should be matched
+        date_120_days_ago = datetime.now(timezone.utc) - timedelta(days=120)
+        mock_crawler.analyze_page.return_value = mock_analysis_old
+        url_id, result = crawl_url_task(
+            url_id=3,
+            search_id=1,
+            keyword="test",
+            match_type="phrase",
+            case_sensitive=False,
+            exact_match=False,
+            engine="fast",
+            ignore_robots=True,
+            date_range_start=date_120_days_ago
+        )
+        assert result["status"] == "matched", f"Expected matched, got {result['status']}"
+
+
 
 if __name__ == "__main__":
     try:

@@ -1,3 +1,16 @@
+# ## Changes (Chinese Site Proxy Support - Options 2 + 4)
+# - Added proxy_url parameter to Crawler.__init__(). Default None = zero behaviour change.
+# - Session proxy configured only inside if self.proxy_url: block.
+# - Accept-Language overridden to zh-CN only when proxy_url is set (not globally).
+# - Added proxy flag to _get_selenium_driver() Chrome options (gated on proxy_url).
+# - Added proxy context to _fetch_lightpanda() via browser.new_context(proxy=...).
+# - Fixed _fetch_http() Chinese charset decoding: GB18030/GBK/GB2312 → correct UTF-8.
+#   Non-Chinese sites hit the fast path (return response.text) with no code change.
+# ## Changes (Trafilatura Integration — KeywordScout v2.0 Upgrade)
+# - Integrated trafilatura.extract() as primary body text extractor with BS4 fallback.
+# - Added trafilatura metadata enrichment for author, title, date fields.
+# - compute_simhash() integrated into analyze_page() return dict.
+# - Upgraded detect_language to use py3langid before falling back to langdetect.
 # ## Changes
 # - Implemented thread-safe LRU+TTL cache (24h TTL, 1000 entry max) for robots.txt files.
 # - Replaced eval() in evaluate_boolean_query with a recursive descent parser.
@@ -56,31 +69,62 @@ try:
 except ImportError:
     LIGHTPANDA_AVAILABLE = False
 
+# Pre-import optional heavy libraries at module load time to avoid per-call import overhead
+try:
+    import trafilatura as _trafilatura
+    from trafilatura.metadata import extract_metadata as _traf_extract_metadata
+    _TRAFILATURA_AVAILABLE = True
+except ImportError:
+    _trafilatura = None
+    _traf_extract_metadata = None
+    _TRAFILATURA_AVAILABLE = False
+
+try:
+    import py3langid as _py3langid
+    _PY3LANGID_AVAILABLE = True
+except ImportError:
+    _py3langid = None
+    _PY3LANGID_AVAILABLE = False
+
 # Thread-safe LRU + TTL Cache for robots.txt parsers
 # Format: domain: (RobotFileParser, fetched_at_float)
 ROBOTS_CACHE: collections.OrderedDict = collections.OrderedDict()
 ROBOTS_CACHE_LOCK = threading.Lock()
 
 def get_chrome_user_agent_details() -> Tuple[str, str]:
-    """Dynamically checks Windows registry to construct a User-Agent and its matching major version."""
-    import winreg
-    version = "120.0.0.0" # Default fallback
-    try:
-        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Google\Chrome\BLBeacon")
-        v, _ = winreg.QueryValueEx(key, "version")
-        if v:
-            version = v
-    except Exception:
+    """
+    Constructs a realistic Chrome User-Agent.
+    On Windows: reads actual installed Chrome version from registry.
+    On Linux/Mac: uses a current hardcoded version as fallback.
+    """
+    import sys
+    version = "124.0.6367.201"  # Stable fallback for non-Windows / registry miss
+    if sys.platform == "win32":
         try:
-            key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Google Chrome")
-            v, _ = winreg.QueryValueEx(key, "DisplayVersion")
-            if v:
-                version = v
-        except Exception:
-            pass
+            import winreg
+            try:
+                key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Google\Chrome\BLBeacon")
+                v, _ = winreg.QueryValueEx(key, "version")
+                if v:
+                    version = v
+            except Exception:
+                try:
+                    key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Google Chrome")
+                    v, _ = winreg.QueryValueEx(key, "DisplayVersion")
+                    if v:
+                        version = v
+                except Exception:
+                    pass
+        except ImportError:
+            pass  # winreg not available even on win32 — keep fallback
     major_version = version.split(".")[0]
-    user_agent = f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{version} Safari/537.36"
+    user_agent = (
+        f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        f"AppleWebKit/537.36 (KHTML, like Gecko) "
+        f"Chrome/{version} Safari/537.36"
+    )
     return user_agent, major_version
+
 
 def patch_chromedriver_if_needed(driver_path: str):
     """Checks if the chromedriver binary is patched; if not, replaces the cdc_ automation variables."""
@@ -111,14 +155,32 @@ def patch_chromedriver_if_needed(driver_path: str):
         print(f"[Stealth Warning] Failed to patch chromedriver: {e}")
 
 class Crawler:
-    def __init__(self, user_agent: str = None):
+    def __init__(self, user_agent: str = None, proxy_url: str = None):
         dynamic_ua, major_version = get_chrome_user_agent_details()
         self.user_agent = user_agent or dynamic_ua
+        self.proxy_url = proxy_url if proxy_url and proxy_url.strip() else None
+
         self.session = requests.Session()
+
+        # Transport-level retry for transient network errors only
+        # (status_forcelist excludes 403/404 — those need application-level handling)
+        from requests.adapters import HTTPAdapter
+        from urllib3.util.retry import Retry
+        _retry_strategy = Retry(
+            total=3,
+            backoff_factor=0.5,
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=["GET", "HEAD"],
+            raise_on_status=False,
+        )
+        _adapter = HTTPAdapter(max_retries=_retry_strategy)
+        self.session.mount("https://", _adapter)
+        self.session.mount("http://", _adapter)
+
         self.session.headers.update({
             "User-Agent": self.user_agent,
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-            "Accept-Language": "en-US,en;q=0.9",
+            "Accept-Language": "en-US,en;q=0.9",        # unchanged default — DO NOT alter for non-proxy
             "Connection": "keep-alive",
             "Upgrade-Insecure-Requests": "1",
             "Sec-Fetch-Dest": "document",
@@ -130,8 +192,22 @@ class Crawler:
             "sec-ch-ua-platform": '"Windows"',
             "Cache-Control": "max-age=0"
         })
-        
-        # Configure Selenium driver if requested and available
+
+        # ── Proxy configuration (only when proxy_url is supplied) ────────────────
+        # When proxy_url is None, self.session.proxies stays empty — identical to
+        # current behaviour for all non-proxy jobs. No default, no env variable read.
+        if self.proxy_url:
+            self.session.proxies.update({
+                "http":  self.proxy_url,
+                "https": self.proxy_url,
+            })
+            # Chinese sites serve Chinese content when Accept-Language prefers zh-CN.
+            # Only override this header when a proxy is actively configured.
+            self.session.headers.update({
+                "Accept-Language": "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7"
+            })
+            print(f"[Proxy] Crawler session configured with proxy: {self.proxy_url}")
+
         self._driver = None
         self._driver_lock = threading.Lock()
 
@@ -149,6 +225,27 @@ class Crawler:
                 chrome_options.add_argument("--no-sandbox")
                 chrome_options.add_argument("--disable-dev-shm-usage")
                 chrome_options.add_argument(f"--user-agent={self.user_agent}")
+                
+                # ── Proxy configuration (only when configured) ────────────────
+                if self.proxy_url:
+                    # Chrome --proxy-server does not accept socks5h:// — strip the 'h'
+                    # so socks5h://host:port becomes socks5://host:port for Chrome.
+                    chrome_proxy_arg = self.proxy_url.replace("socks5h://", "socks5://")
+                    chrome_options.add_argument(f"--proxy-server={chrome_proxy_arg}")
+
+                    # DNS leak prevention for SOCKS5 proxies:
+                    # Without this rule, Chrome resolves hostnames via the local OS
+                    # DNS resolver before the proxy sees the request — leaking the
+                    # queried hostname outside of Tor. This forces all resolution
+                    # through the SOCKS5 proxy instead.
+                    if "socks5" in self.proxy_url.lower():
+                        chrome_options.add_argument(
+                            "--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE localhost"
+                        )
+                        print("[Proxy] Selenium Chrome: SOCKS5 DNS leak prevention enabled.")
+
+                    print(f"[Proxy] Selenium Chrome configured with proxy: {chrome_proxy_arg}")
+                # ─────────────────────────────────────────────────────────────
                 
                 # Avoid bot detection by hiding automation controls
                 chrome_options.add_argument("--disable-blink-features=AutomationControlled")
@@ -172,23 +269,28 @@ class Crawler:
 
     def _fetch_lightpanda(self, url: str) -> str:
         """
-        Fetches the HTML of a page using Lightpanda's browser engine via the
-        Chrome DevTools Protocol (CDP) connection with Playwright.
-        
-        This method connects to Lightpanda's CDP endpoint (default: ws://localhost:9222)
-        using Playwright's synchronous API, navigates to the target URL, and returns
-        the page content.
+        Fetches the HTML of a page using Lightpanda's browser engine via CDP + Playwright.
+        Routes through proxy if configured on this Crawler instance.
         """
         if not LIGHTPANDA_AVAILABLE:
             raise RuntimeError("Playwright is not installed in the current environment.")
-        
-        endpoint = "ws://localhost:9222"
+
+        endpoint = "ws://localhost:9222"   # unchanged — Lightpanda always runs locally
         with sync_playwright() as p:
             browser = p.chromium.connect_over_cdp(endpoint)
             try:
-                page = browser.new_page()
+                # ── Proxy context (only when configured) ─────────────────────────
+                if self.proxy_url:
+                    context = browser.new_context(proxy={"server": self.proxy_url})
+                    print(f"[Proxy] Lightpanda context configured with proxy: {self.proxy_url}")
+                else:
+                    context = browser.new_context()   # identical to current new_page() behaviour
+                # ─────────────────────────────────────────────────────────────────
+                page = context.new_page()
                 page.goto(url)
-                return page.content()
+                content = page.content()
+                context.close()
+                return content
             finally:
                 browser.close()
 
@@ -254,6 +356,92 @@ class Crawler:
         except Exception:
             pass
 
+    def is_error_page(self, html: str, soup: BeautifulSoup = None) -> Tuple[bool, str]:
+        """
+        Detects if the given HTML content represents a server error, DNS error,
+        Cloudflare block/challenge page, or other common scraper failure pages.
+        Returns (is_error, reason_message).
+        Accepts a pre-parsed soup to avoid redundant parsing.
+        """
+        if not html or not isinstance(html, str) or not html.strip():
+            return True, "Empty or invalid response content"
+
+        soup = soup or BeautifulSoup(html, "html.parser")
+        
+        # 1. Title tag check
+        title = ""
+        if soup.title:
+            title_text = soup.title.get_text()
+            if title_text:
+                title = title_text.strip()
+        
+        title_lower = title.lower()
+        
+        # Common error indicators in page title
+        error_indicators = [
+            ("504 gateway time-out", "504 Gateway Time-out"),
+            ("504 gateway timeout", "504 Gateway Timeout"),
+            ("502 bad gateway", "502 Bad Gateway"),
+            ("503 service unavailable", "503 Service Unavailable"),
+            ("503 service temporarily unavailable", "503 Service Temporarily Unavailable"),
+            ("500 internal server error", "500 Internal Server Error"),
+            ("403 forbidden", "403 Forbidden"),
+            ("404 not found", "404 Not Found"),
+            ("database error", "Database Error"),
+            ("database connection error", "Database Connection Error"),
+            ("error establishing a database connection", "Database Connection Error"),
+            ("site is down", "Site is down"),
+            ("maintenance mode", "Maintenance Mode"),
+            ("access denied", "Access Denied"),
+            ("gateway time-out", "Gateway Time-out"),
+            ("gateway timeout", "Gateway Timeout"),
+            ("bad gateway", "Bad Gateway"),
+        ]
+        
+        for pattern_lower, label in error_indicators:
+            if pattern_lower in title_lower:
+                # Avoid false positives for normal articles (usually have longer titles)
+                if len(title) < 120:
+                    return True, f"{label} detected in page title: '{title}'"
+                    
+        # Extract clean text from body to check for errors in text
+        temp_soup = BeautifulSoup(html, "html.parser")
+        for tag in temp_soup(["script", "style", "head", "iframe"]):
+            tag.decompose()
+        body_text = temp_soup.get_text()
+        body_text = " ".join(body_text.split())
+        body_text_lower = body_text.lower()
+        
+        # 2. Raw text error page check (e.g. plain text or simple page like "502 Bad Gateway")
+        if len(body_text) < 1200:
+            for pattern_lower, label in error_indicators:
+                idx = body_text_lower.find(pattern_lower)
+                if idx != -1 and idx < 120:
+                    return True, f"{label} detected in short body text"
+                elif len(body_text) < 250 and pattern_lower in body_text_lower:
+                    return True, f"{label} detected in extremely short body text"
+                    
+        # 3. Cloudflare specific blocks/challenges
+        if "cloudflare" in body_text_lower or "cloudflare" in title_lower:
+            cf_signals = [
+                "ray id", "security check", "ddos protection", "verify you are human",
+                "checking your browser", "enable cookies", "enable javascript",
+                "captcha", "turnstile", "unusual traffic", "browser validation"
+            ]
+            matched_signals = [sig for sig in cf_signals if sig in body_text_lower]
+            if len(matched_signals) >= 2 or (len(body_text) < 1500 and len(matched_signals) >= 1):
+                return True, f"Cloudflare block/challenge page detected (signals: {matched_signals})"
+                
+        # 4. Meta-refresh to challenge page (common Cloudflare interstitial pattern)
+        meta_refresh = soup.find("meta", attrs={"http-equiv": re.compile(r"refresh", re.I)})
+        if meta_refresh:
+            content_attr = meta_refresh.get("content", "")
+            if "url=" in content_attr.lower() and len(body_text) < 2000:
+                return True, "Meta-refresh challenge page detected"
+
+        return False, ""
+
+
     def is_allowed_by_robots(self, url: str) -> bool:
         """Checks if the path can be crawled according to robots.txt."""
         try:
@@ -272,29 +460,37 @@ class Crawler:
         if not ignore_robots and not self.is_allowed_by_robots(url):
             raise PermissionError("Crawling forbidden by robots.txt")
             
+        html_content = ""
         if engine == "dynamic" and SELENIUM_AVAILABLE:
             try:
                 driver = self._get_selenium_driver()
                 driver.get(url)
-                # Wait up to 5 seconds for page load / body presence
-                driver.implicitly_wait(5)
-                return driver.page_source
+                from selenium.webdriver.support.ui import WebDriverWait
+                from selenium.webdriver.support import expected_conditions as EC
+                from selenium.webdriver.common.by import By
+                try:
+                    WebDriverWait(driver, 10).until(
+                        EC.presence_of_element_located((By.TAG_NAME, "body"))
+                    )
+                except Exception:
+                    pass  # If body never appears, still grab whatever is there
+                html_content = driver.page_source
             except Exception as e:
                 # Fallback to HTTP requests on selenium error
                 print(f"Selenium fetch failed, falling back to HTTP: {e}")
-                return self._fetch_http(url)
+                html_content = self._fetch_http(url)
         elif engine == "lightpanda" and LIGHTPANDA_AVAILABLE:
             try:
-                return self._fetch_lightpanda(url)
+                html_content = self._fetch_lightpanda(url)
             except Exception as e:
                 print(f"Lightpanda fetch failed, falling back to HTTP: {e}")
-                return self._fetch_http(url)
+                html_content = self._fetch_http(url)
         elif engine == "lightpanda" and not LIGHTPANDA_AVAILABLE:
             print("Lightpanda not installed. Falling back to fast engine.")
-            return self._fetch_http(url)
+            html_content = self._fetch_http(url)
         else:
             try:
-                return self._fetch_http(url)
+                html_content = self._fetch_http(url)
             except requests.exceptions.HTTPError as http_err:
                 status_code = http_err.response.status_code if http_err.response is not None else None
                 # Only fall back to Selenium for 403 (e.g. Cloudflare / WAF block)
@@ -303,8 +499,16 @@ class Crawler:
                     try:
                         driver = self._get_selenium_driver()
                         driver.get(url)
-                        driver.implicitly_wait(5)
-                        return driver.page_source
+                        from selenium.webdriver.support.ui import WebDriverWait
+                        from selenium.webdriver.support import expected_conditions as EC
+                        from selenium.webdriver.common.by import By
+                        try:
+                            WebDriverWait(driver, 10).until(
+                                EC.presence_of_element_located((By.TAG_NAME, "body"))
+                            )
+                        except Exception:
+                            pass
+                        html_content = driver.page_source
                     except Exception as selenium_error:
                         print(f"Selenium fallback also failed: {selenium_error}")
                         raise http_err
@@ -317,38 +521,115 @@ class Crawler:
                     try:
                         driver = self._get_selenium_driver()
                         driver.get(url)
-                        driver.implicitly_wait(5)
-                        return driver.page_source
+                        from selenium.webdriver.support.ui import WebDriverWait
+                        from selenium.webdriver.support import expected_conditions as EC
+                        from selenium.webdriver.common.by import By
+                        try:
+                            WebDriverWait(driver, 10).until(
+                                EC.presence_of_element_located((By.TAG_NAME, "body"))
+                            )
+                        except Exception:
+                            pass
+                        html_content = driver.page_source
                     except Exception as selenium_error:
                         print(f"Selenium fallback also failed: {selenium_error}")
                         raise e
                 else:
                     raise e
 
+        # Validate that the fetched content is not an error page
+        is_err, reason = self.is_error_page(html_content)
+        if is_err:
+            raise RuntimeError(f"Crawl failed: {reason}")
+
+        return html_content
+
+
     def _fetch_http(self, url: str) -> str:
-        """Fetches page content using raw requests."""
-        response = self.session.get(url, timeout=7, allow_redirects=True)
+        """
+        Fetches page content using raw requests.
+        For non-Chinese sites: behaviour identical to before (returns response.text).
+        For Chinese sites (GB18030/GBK/GB2312): decodes bytes correctly instead of
+        returning mojibake from requests' ISO-8859-1 fallback.
+        """
+        # Adaptive timeout: connect fast (5s), read generous (25s for slow servers)
+        response = self.session.get(url, timeout=(5, 25), allow_redirects=True)
         response.raise_for_status()
+
+        # ── Fast path: non-Chinese encoding detected ─────────────────────────────
+        # requests correctly detects UTF-8, Big5, EUC-JP, etc. from the Content-Type
+        # header. Return response.text directly — same as the current implementation.
+        detected = (response.encoding or "").lower().replace("-", "").replace("_", "")
+        _CN_NORMALIZED = {"gb2312", "gbk", "gb18030", "csgb2312", "chinese", "xgbk", "gbk2312"}
+
+        if detected and detected not in _CN_NORMALIZED and detected not in ("iso88591", "windows1252", "latin1", ""):
+            return response.text   # ← exits here for all non-Chinese, non-ambiguous sites
+
+        # ── Slow path: ambiguous or Chinese encoding ─────────────────────────────
+        # Reached only when: (a) requests guessed ISO-8859-1/latin-1 (common fallback
+        # for missing charset), OR (b) Content-Type explicitly declares a CN charset.
+
+        # Step 1: Check HTTP Content-Type header charset
+        content_type = response.headers.get("Content-Type", "").lower()
+        declared = ""
+        if "charset=" in content_type:
+            declared = content_type.split("charset=")[-1].split(";")[0].strip().lower().replace("-", "").replace("_", "")
+
+        # Step 2: If not found or ambiguous, scan the first 4096 bytes for <meta charset>
+        if not declared or declared in ("iso88591", "windows1252", "latin1", ""):
+            import re as _re
+            raw_preview = response.content[:4096].decode("latin-1", errors="replace")
+            meta_match = _re.search(
+                r'<meta[^>]+charset\s*=\s*["\']?\s*([a-zA-Z0-9_\-]+)',
+                raw_preview,
+                _re.IGNORECASE
+            )
+            if meta_match:
+                declared = meta_match.group(1).strip().lower().replace("-", "").replace("_", "")
+
+        # Step 3: If a Chinese charset is confirmed, decode from raw bytes using GB18030
+        # (GB18030 is a strict superset of GBK and GB2312 — one codec handles all three)
+        if declared in _CN_NORMALIZED:
+            try:
+                return response.content.decode("gb18030", errors="replace")
+            except Exception:
+                pass  # fall through to response.text
+
+        # Step 4: Final fallback — response.text (same as current behaviour)
         return response.text
 
     @staticmethod
-    def clean_html_content(soup: BeautifulSoup) -> str:
-        """Removes script, style, footer, header, and nav tags to isolate main body text."""
-        # 1. Try to find main article content container for news websites
-        # <article>, [itemprop="articleBody"], or main content tags
-        main_content = (
-            soup.find("article") or 
-            soup.find(attrs={"itemprop": "articleBody"}) or
-            soup.find("main") or
-            soup.find(id="main-content") or
-            soup.find(class_="main-content")
-        )
+    def clean_html_content(soup: BeautifulSoup, html_content: str = "") -> str:
+        """
+        Extracts main article body text.
+        PRIMARY: Trafilatura multi-algorithm extractor (Readability + jusText + custom).
+        FALLBACK: Existing BeautifulSoup heuristic extractor.
+        FALLBACK THRESHOLD: If Trafilatura returns fewer than MIN_EXTRACTED_SIZE characters.
+        """
+        # 1. Try Trafilatura first
+        if html_content:
+            try:
+                from backend.firecrawl_converter import MIN_EXTRACTED_SIZE
+                if _TRAFILATURA_AVAILABLE:
+                    extracted = _trafilatura.extract(
+                        html_content,
+                        include_comments=False,
+                        include_tables=True,
+                        no_fallback=False,         # use all algorithms
+                        favor_recall=True,         # prioritize content completeness over noise reduction
+                        deduplicate=False,         # we handle deduplication ourselves
+                    )
+                    if extracted and len(extracted.strip()) >= MIN_EXTRACTED_SIZE:
+                        return extracted.strip()
+            except Exception as traf_err:
+                print(f"[Trafilatura Warning] Extraction failed, using fallback: {traf_err}")
+
+        # 2. Fall back to existing BeautifulSoup heuristic (keep existing code here unchanged)
+        from backend.firecrawl_converter import extract_primary_content_container
         
-        # If a specific article or main container is found, work on a copy of that element
-        if main_content:
-            target_soup = BeautifulSoup(str(main_content), "html.parser")
-        else:
-            target_soup = BeautifulSoup(str(soup), "html.parser")
+        main_content = extract_primary_content_container(soup)
+        # Reuse the already-extracted subtree directly instead of round-tripping through str()
+        target_soup = main_content if hasattr(main_content, 'find_all') else BeautifulSoup(str(main_content), "html.parser")
             
         # Decompose non-content boilerplate elements
         for tag in target_soup(["script", "style", "nav", "footer", "header", "aside", "noscript"]):
@@ -382,8 +663,11 @@ class Crawler:
         apply_stop_patterns(target_soup)
         text = target_soup.get_text(separator=" ")
         # Fallback to cleaning the full soup if article heuristic yielded extremely short text
-        if main_content and len(text.strip()) < 200:
-            target_soup = BeautifulSoup(str(soup), "html.parser")
+        from backend.firecrawl_converter import MIN_EXTRACTED_SIZE
+        if len(text.strip()) < MIN_EXTRACTED_SIZE:
+            # Reuse the passed-in soup directly rather than re-parsing from string
+            import copy
+            target_soup = copy.copy(soup)
             for tag in target_soup(["script", "style", "nav", "footer", "header", "aside", "noscript"]):
                 tag.decompose()
             apply_stop_patterns(target_soup)
@@ -487,7 +771,11 @@ class Crawler:
 
     @staticmethod
     def detect_language(soup: BeautifulSoup, body_text: str = "") -> Optional[str]:
-        """Detects page language from HTML lang tag, meta tags, or langdetect fallback."""
+        """
+        Detects page language.
+        Priority: HTML lang tag > Trafilatura/py3langid > langdetect fallback.
+        """
+        # 1. HTML lang tag
         html_tag = soup.find("html")
         if html_tag and html_tag.get("lang"):
             return html_tag.get("lang").split("-")[0].strip().lower()
@@ -495,7 +783,18 @@ class Crawler:
         meta_lang = soup.find("meta", attrs={"http-equiv": "content-language"})
         if meta_lang and meta_lang.get("content"):
             return meta_lang.get("content").split(",")[0].strip().lower()
+
+        # 2. Trafilatura/py3langid (new — more accurate on short texts)
+        if body_text:
+            try:
+                if _PY3LANGID_AVAILABLE:
+                    lang, confidence = _py3langid.classify(body_text[:2000])
+                    if confidence > 0.9:
+                        return lang
+            except Exception:
+                pass
             
+        # 3. langdetect fallback
         if body_text:
             try:
                 from langdetect import detect
@@ -522,9 +821,9 @@ class Crawler:
                 val = tag.get("datetime") or tag.get("content")
                 if val:
                     try:
-                        # Clean string and try to parse standard ISO format
+                        # BUGFIX: Return timezone-aware datetime to avoid offset-naive vs offset-aware comparison errors.
                         val_cleaned = val.split("T")[0]  # Take YYYY-MM-DD
-                        return datetime.strptime(val_cleaned, "%Y-%m-%d")
+                        return datetime.strptime(val_cleaned, "%Y-%m-%d").replace(tzinfo=timezone.utc)
                     except Exception:
                         pass
         return None
@@ -646,15 +945,45 @@ class Crawler:
                 description = str(desc_content).strip()
         
         from backend.firecrawl_converter import convert_html_to_firecrawl_schema
-        normalized_data = convert_html_to_firecrawl_schema(html_content, url)
+        normalized_data = convert_html_to_firecrawl_schema(html_content, url, soup=soup)
         markdown_content = normalized_data["data"]["markdown"]
         
-        body_text = self.clean_html_content(soup)
+        body_text = self.clean_html_content(soup, html_content=html_content)
         language = self.detect_language(soup, body_text)
         pub_date = self.detect_date(soup)
         content_hash = self.calculate_content_hash(body_text)
         author = self.extract_author(soup)
         image_url = self.extract_image_url(soup, url)
+
+        # Enrich metadata using Trafilatura if possible
+        try:
+            if _TRAFILATURA_AVAILABLE:
+                traf_meta = _traf_extract_metadata(html_content)
+            else:
+                traf_meta = None
+            if traf_meta:
+                # Enrich author if existing extraction returned "Unknown"
+                if (not author or author == "Unknown") and traf_meta.author:
+                    author = str(traf_meta.author)[:100]
+                # Enrich title if empty
+                if not title and traf_meta.title:
+                    title = str(traf_meta.title)[:200]
+                # Enrich description if empty
+                if not description and traf_meta.description:
+                    description = str(traf_meta.description)
+                # Enrich pub_date if not found by existing parser
+                if not pub_date and traf_meta.date:
+                    try:
+                        # BUGFIX: Return timezone-aware datetime to avoid offset-naive vs offset-aware comparison errors.
+                        pub_date = datetime.strptime(str(traf_meta.date)[:10], "%Y-%m-%d").replace(tzinfo=timezone.utc)
+                    except Exception:
+                        pass
+        except Exception:
+            pass  # Metadata enrichment is best-effort, never block the pipeline
+
+        # Compute SimHash fingerprint
+        from backend.simhash_dedup import compute_simhash
+        simhash_val = compute_simhash(body_text)
 
         
         # 2. Extract domain and check URL keyword presence
@@ -756,8 +1085,9 @@ class Crawler:
                 full_crawlable_text = f"{title}\n{description}\n{body_text}\n{url}"
                 matched = self.evaluate_boolean_query(full_crawlable_text, keyword, case_sensitive)
             else:
-                # Require that all searched keywords are found in the parsed content (AND logic)
-                matched = len(matched_keywords_found) == len(search_terms_list)
+                # Require that at least one searched keyword is found in the parsed content (OR logic)
+                matched = len(matched_keywords_found) > 0
+
 
         # 4. Snippet Generation
         snippet = ""
@@ -814,7 +1144,9 @@ class Crawler:
             "content_hash": content_hash,
             "description": description,
             "full_content": markdown_content,
+            "raw_html": html_content,
             "author": author[:100] if author else "Unknown",
+            "simhash": simhash_val,
 
             "image_url": image_url,
             "image_links": image_links_json,

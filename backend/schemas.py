@@ -1,3 +1,5 @@
+# ## Changes (Trafilatura Integration — KeywordScout v2.0 Upgrade)
+# - Added "sitemap" and "feed" source_types to SearchQueryCreate.
 # ## Changes
 # - Added ignore_robots parameter to SearchQueryCreate schema.
 # - Added ignore_robots parameter to SearchQueryResponse schema.
@@ -7,7 +9,7 @@ from typing import List, Optional, Dict
 from pydantic import BaseModel
 
 class SearchQueryCreate(BaseModel):
-    keyword: str
+    keyword: Optional[str] = ""
     match_type: Optional[str] = "phrase"  # "phrase" or "boolean"
     case_sensitive: Optional[bool] = False
     exact_match: Optional[bool] = False
@@ -16,9 +18,14 @@ class SearchQueryCreate(BaseModel):
     date_range_start: Optional[datetime] = None
     date_range_end: Optional[datetime] = None
     engine: Optional[str] = "fast"  # "fast", "dynamic", or "lightpanda"
-    source_type: Optional[str] = "search"  # "search" or "direct"
+    source_type: Optional[str] = "search"  # Allowed: "search", "direct", "sitemap", "feed"
     direct_urls: Optional[str] = None  # Multiline string of raw URLs
     ignore_robots: Optional[bool] = False
+    proxy_url: Optional[str] = None  # HTTP/SOCKS5 proxy e.g. "socks5h://host:1080" or "http://host:8080"
+    schedule_time_hour: Optional[int] = None
+    schedule_time_minute: Optional[int] = None
+    schedule_time_weekday: Optional[int] = None
+    schedule_time_day: Optional[int] = None
 
 class SearchQueryResponse(BaseModel):
     id: int
@@ -64,6 +71,7 @@ class CrawledURLResponse(BaseModel):
     is_duplicate: bool
     description: Optional[str] = None
     full_content: Optional[str] = None
+    raw_html: Optional[str] = None
     author: Optional[str] = None
     image_url: Optional[str] = None
     image_links: Optional[str] = None
@@ -81,10 +89,11 @@ class PaginatedCrawledURLResponse(BaseModel):
     items: List[CrawledURLResponse]
 
 class SearchScheduleCreate(BaseModel):
-    keyword: str
+    keyword: Optional[str] = ""
     frequency: str  # "daily", "weekly", "monthly"
     engine: Optional[str] = "fast"
     config: SearchQueryCreate
+    next_run: Optional[datetime] = None
 
 class SearchScheduleResponse(BaseModel):
     id: int
@@ -151,5 +160,6 @@ class ScrapeRequest(BaseModel):
     url: str
     engine: Optional[str] = "fast"
     ignore_robots: Optional[bool] = False
+    proxy_url: Optional[str] = None  # HTTP/SOCKS5 proxy for geo-restricted sites
 
 
