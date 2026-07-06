@@ -10,6 +10,21 @@ A premium, modern, glassmorphism-styled web application built with **FastAPI**, 
 - **⚡ Dual Crawling Engines**:
   - **Fast HTTP Engine (`requests`)**: Fast, lightweight scraping with standard browser headers and rate-limiting enforcement.
   - **Dynamic JS Engine (`selenium`)**: Spawns Headless Chrome to load dynamic web pages, bypass basic bot checks, progressively scroll to trigger lazy loading, and auto-click article expand buttons ("Read More", "Show More", etc.).
+- **🔒 Tor Anonymous Routing & SOCKS5 Proxy Routing**:
+  - Automatically routes traffic through a SOCKS5 Tor proxy (`127.0.0.1:9050`) when the "Route through Tor" toggle is enabled in Advanced Settings.
+  - Features DNS leak prevention (using SOCKS5h protocols for HTTP requests and isolated DNS rules for Headless Chrome).
+  - Handles IP rotation on request failure or on demand.
+  - Automatically downloads and configures the Tor Expert Bundle on Windows via `backend/tor_setup.py` when using `run.bat`.
+- **🛡️ Near-Duplicate Content Deduplication (SimHash)**:
+  - Integrates a 64-bit Charikar SimHash algorithm utilizing Blake2b hashing.
+  - Prevents indexing of near-duplicate content by computing text fingerprints and checking Hamming distances (automatically skips pages with a Hamming distance $\le 3$).
+- **🔍 Native Site-Search Form Detection & Interception**:
+  - Automatically identifies search fields and forms (`<form>`, `<input type="search">`) on landing pages.
+  - Intercepts default crawling to perform native site search queries using search parameters, deep scanning only related matching articles.
+- **🗺️ XML Sitemap & RSS/Atom Feed Parsing**:
+  - Automatically discovers XML sitemaps and RSS/Atom feeds (e.g. `/sitemap.xml`, `/rss`, `/feed/`) for a domain to instantly expand target lists with high-relevance URLs.
+- **🎯 Intelligent URL Classification & Prioritization**:
+  - Pre-filters candidate URLs in O(1) based on path patterns, avoiding duplicate pagination result index lists, static assets, and non-content urls to speed up scraper crawling cycles.
 - **🔍 Advanced Matching Logic**:
   - **Boolean Search**: Supports logical expressions like `AND`, `OR`, `NOT`, and parenthesis grouping (e.g. `python AND (fastapi OR ruby)`) via a custom recursive descent parser.
   - **Multi-Keyword Lists**: Search for multiple comma- or newline-separated keywords. Matches are flagged in the UI as beautiful tags.
@@ -53,13 +68,27 @@ A premium, modern, glassmorphism-styled web application built with **FastAPI**, 
 │   ├── exporter.py             # Spreadsheet stream output generator (Excel/CSV/JSON/Parquet)
 │   ├── scheduler.py            # Recurring cron scheduler loops for active automations
 │   ├── firecrawl_converter.py  # Firecrawl content parser, DOM scoring, and Markdown extraction layer
-│   └── postgres_integration.py # PostgreSQL scraped_articles sync engine and heuristic classifier
+│   ├── postgres_integration.py # PostgreSQL scraped_articles sync engine and heuristic classifier
+│   ├── tor_router.py           # Tor SOCKS5 routing utilities & DNS leak prevention
+│   ├── tor_setup.py            # Auto-downloader & extractor for Tor Expert Bundle on Windows
+│   ├── simhash_dedup.py        # SimHash content deduplication & near-duplicate filters
+│   ├── site_search_detector.py # Auto-detects search forms on target domains to query keywords directly
+│   ├── sitemap_discovery.py    # Discovers XML sitemaps & RSS/Atom feeds to find deep links
+│   ├── url_classifier.py       # Filters non-content urls (static, pagination) in O(1)
+│   └── test_site_search.py     # Unit tests verifying site search detection and form routing
 ├── static/
 │   ├── index.html              # Single Page Application HTML markup with Glassmorphic dashboard
 │   ├── app.js                  # AJAX request controllers, polling state, and table renderers
-│   └── styles.css              # Premium Dark-mode Glassmorphic neon-glow styling
+│   ├── styles.css              # Premium Dark-mode Glassmorphic neon-glow styling
+│   ├── test_search.html        # Local mock site search landing page (for crawling diagnostic testing)
+│   ├── search_results.html     # Local mock site search results list page
+│   ├── search_results_page2.html # Local mock site search results pagination page 2
+│   ├── article_matched_1.html  # Mock article 1 containing matching test content
+│   ├── article_matched_2.html  # Mock article 2 containing matching test content
+│   ├── article_matched_3.html  # Mock article 3 containing matching test content
+│   └── should-not-expand.html  # Mock non-article page that should be excluded from deep extraction
 ├── requirements.txt            # Python package requirements checklist (includes psycopg2-binary)
-├── run.bat                     # Automated Windows setup & launcher script
+├── run.bat                     # Automated Windows setup & launcher script (auto-starts Tor proxy)
 ├── test_crawler.py             # Comprehensive diagnostic suite for database, search, and normalizer logic
 └── selenium_scraper.py         # Standalone CLI dynamic sequential pagination scraper with PostgreSQL classifier
 ```
@@ -122,6 +151,27 @@ For standalone command-line operations (which check sequential next-page paginat
    python selenium_scraper.py
    ```
 3. The script will output a structured JSON containing the extracted text content, lead images, and video resource links from matching landing/paginated pages, conforming to the 19-field classification schema.
+
+---
+
+## 🛠️ Search URL Inspector CLI Utility
+
+A comprehensive terminal administration tool (`inspect_search_urls.py`) is provided to inspect queries, check crawler queues, reset url states, and export database files.
+
+Run the utility:
+```bash
+python inspect_search_urls.py --list
+```
+
+### Options:
+- `--list`: Display list of recent search queries and their statuses.
+- `--search-id <id>`: Inspect a specific search query detailed URL crawl list (all pending, crawling, matched, skipped, and failed links).
+- `--status <status>`: Filter inspected URLs by status (`pending`, `crawling`, `matched`, `skipped`, `failed`).
+- `--limit <num>`: Limit output list results (default: 10).
+- `--export <path>`: Export filtered URL inspection list to a CSV file.
+- `--reset-failed`: Reset all failed URLs of a specific search query ID back to `pending` status so the crawler retries them.
+- `--reset-skipped`: Reset all skipped URLs of a specific search query ID back to `pending`.
+- `--interactive` / `-i`: Run the utility in interactive step-by-step console mode.
 
 ---
 
