@@ -1,0 +1,508 @@
+{
+  "version": "1.1",
+  "description": "KeywordScout URL config — regional news sources across Asia and South Asia",
+  "groups": {
+    "china": "Chinese state media and government",
+    "myanmar": "Myanmar / Burmese news and media",
+    "northeast_india": "Northeast India regional press",
+    "pakistan_central_asia": "Pakistan, Balochistan, and Central Asia",
+    "southeast_asia": "Southeast Asia Region",
+    "bulk_url_group": "Bulk URL Group",
+    "general": "General"
+  },
+  "urls": [
+    {
+      "url": "https://www.chinadaily.com.cn/",
+      "label": "China Daily",
+      "group": "china",
+      "type": "news",
+      "language": "en",
+      "notes": "State-run English-language newspaper"
+    },
+    {
+      "url": "https://www.cgtn.com",
+      "label": "CGTN",
+      "group": "china",
+      "type": "news",
+      "language": "en",
+      "notes": "China Global Television Network — English international channel"
+    },
+    {
+      "url": "https://www.globaltimes.cn",
+      "label": "Global Times",
+      "group": "china",
+      "type": "news",
+      "language": "en",
+      "notes": "English-language tabloid under People's Daily"
+    },
+    {
+      "url": "https://www.fmprc.gov.cn/en/",
+      "label": "Ministry of Foreign Affairs",
+      "group": "china",
+      "type": "government",
+      "language": "en",
+      "notes": "Official statements, press briefings, foreign policy positions"
+    },
+    {
+      "url": "https://www.stats.gov.cn/english",
+      "label": "National Bureau of Statistics",
+      "group": "china",
+      "type": "government",
+      "language": "en",
+      "notes": "Official economic and demographic data releases"
+    },
+    {
+      "url": "https://www.irrawaddy.com/",
+      "label": "The Irrawaddy",
+      "group": "myanmar",
+      "type": "news",
+      "language": "en",
+      "notes": "Independent Thai-based Myanmar news outlet"
+    },
+    {
+      "url": "https://www.mizzima.com/",
+      "label": "Mizzima",
+      "group": "myanmar",
+      "type": "news",
+      "language": "en",
+      "notes": "Independent Myanmar news agency"
+    },
+    {
+      "url": "https://www.dvb.no/",
+      "label": "Democratic Voice of Burma",
+      "group": "myanmar",
+      "type": "news",
+      "language": "en",
+      "notes": "Norwegian-funded independent broadcaster"
+    },
+    {
+      "url": "https://www.bnionline.net/en",
+      "label": "BNI Online",
+      "group": "myanmar",
+      "type": "news",
+      "language": "en",
+      "notes": "Burma News International — ethnic media network"
+    },
+    {
+      "url": "https://www.bbc.com/burmese",
+      "label": "BBC Burmese",
+      "group": "myanmar",
+      "type": "news",
+      "language": "my",
+      "notes": "BBC Burmese language service"
+    },
+    {
+      "url": "https://burmese.voanews.com/",
+      "label": "VOA Burmese",
+      "group": "myanmar",
+      "type": "news",
+      "language": "my",
+      "notes": "Voice of America Burmese service"
+    },
+    {
+      "url": "https://www.rfa.org/burmese/",
+      "label": "RFA Burmese",
+      "group": "myanmar",
+      "type": "news",
+      "language": "my",
+      "notes": "Radio Free Asia Burmese service"
+    },
+    {
+      "url": "https://elevenmyanmar.com/",
+      "label": "Eleven Myanmar",
+      "group": "myanmar",
+      "type": "news",
+      "language": "en",
+      "notes": "Independent English-language Myanmar newspaper"
+    },
+    {
+      "url": "https://kachinnews.com/",
+      "label": "Kachin News Group",
+      "group": "myanmar",
+      "type": "news",
+      "language": "en",
+      "notes": "Kachin ethnic region news"
+    },
+    {
+      "url": "https://www.mmbiztoday.com/",
+      "label": "Myanmar Business Today",
+      "group": "myanmar",
+      "type": "news",
+      "language": "en",
+      "notes": "Myanmar business and economy coverage"
+    },
+    {
+      "url": "https://ifa.gov.np/en/",
+      "label": "Nepal IFA",
+      "group": "northeast_india",
+      "type": "government",
+      "language": "en",
+      "notes": "Nepal Institute of Foreign Affairs"
+    },
+    {
+      "url": "https://newslivetv.com/",
+      "label": "News Live TV",
+      "group": "northeast_india",
+      "type": "news",
+      "language": "en",
+      "notes": "Assam-based news television"
+    },
+    {
+      "url": "https://www.hornbilltv.com/",
+      "label": "Hornbill TV",
+      "group": "northeast_india",
+      "type": "news",
+      "language": "en",
+      "notes": "Nagaland-based broadcaster"
+    },
+    {
+      "url": "https://nenow.in/",
+      "label": "NE Now",
+      "group": "northeast_india",
+      "type": "news",
+      "language": "en",
+      "notes": "Northeast India news portal"
+    },
+    {
+      "url": "https://assamtribune.com/",
+      "label": "Assam Tribune",
+      "group": "northeast_india",
+      "type": "news",
+      "language": "en",
+      "notes": "Oldest English daily in Northeast India"
+    },
+    {
+      "url": "https://theshillongtimes.com/",
+      "label": "The Shillong Times",
+      "group": "northeast_india",
+      "type": "news",
+      "language": "en",
+      "notes": "Meghalaya's leading English daily"
+    },
+    {
+      "url": "https://www.thesangaiexpress.com/",
+      "label": "The Sangai Express",
+      "group": "northeast_india",
+      "type": "news",
+      "language": "en",
+      "notes": "Manipur's leading English daily"
+    },
+    {
+      "url": "https://eastmojo.com/",
+      "label": "East Mojo",
+      "group": "northeast_india",
+      "type": "news",
+      "language": "en",
+      "notes": "Digital news platform for Northeast India"
+    },
+    {
+      "url": "https://nagalandpost.com/",
+      "label": "Nagaland Post",
+      "group": "northeast_india",
+      "type": "news",
+      "language": "en",
+      "notes": "Nagaland's English daily"
+    },
+    {
+      "url": "https://ukhrultimes.com/",
+      "label": "Ukhrul Times",
+      "group": "northeast_india",
+      "type": "news",
+      "language": "en",
+      "notes": "Ukhrul district community news, Manipur"
+    },
+    {
+      "url": "https://understandingwar.org",
+      "label": "ISW",
+      "group": "pakistan_central_asia",
+      "type": "think_tank",
+      "language": "en",
+      "notes": "Institute for the Study of War — conflict analysis"
+    },
+    {
+      "url": "https://thebalochistanpost.net/",
+      "label": "The Balochistan Post",
+      "group": "pakistan_central_asia",
+      "type": "news",
+      "language": "en",
+      "notes": "Independent Balochistan regional news"
+    },
+    {
+      "url": "https://dawn.com/",
+      "label": "Dawn",
+      "group": "pakistan_central_asia",
+      "type": "news",
+      "language": "en",
+      "notes": "Pakistan's leading English-language newspaper"
+    },
+    {
+      "url": "https://www.khama.com/",
+      "label": "Khama Press",
+      "group": "pakistan_central_asia",
+      "type": "news",
+      "language": "en",
+      "notes": "Afghan and Central Asian news"
+    },
+    {
+      "url": "https://www.sangar.info/en",
+      "label": "Sangar",
+      "group": "pakistan_central_asia",
+      "type": "news",
+      "language": "en",
+      "notes": "Baloch news and analysis"
+    },
+    {
+      "url": "https://eurasiareview.com/",
+      "label": "Eurasia Review",
+      "group": "pakistan_central_asia",
+      "type": "news",
+      "language": "en",
+      "notes": "News and analysis journal covering Eurasia"
+    },
+    {
+      "url": "https://www.brecorder.com",
+      "label": "Business Recorder",
+      "group": "pakistan_central_asia",
+      "type": "news",
+      "language": "en",
+      "notes": "Pakistan's financial and business newspaper"
+    },
+    {
+      "url": "https://khyberchronicles.pk",
+      "label": "Khyber Chronicles",
+      "group": "pakistan_central_asia",
+      "type": "news",
+      "language": "en",
+      "notes": "KP and tribal areas news coverage, Pakistan"
+    },
+    {
+      "url": "https://freebalochistan.com/",
+      "label": "Free Balochistan",
+      "group": "pakistan_central_asia",
+      "type": "other",
+      "language": "en",
+      "notes": "Balochistan advocacy and news site"
+    },
+    {
+      "url": "https://www.prothomalo.com",
+      "label": "Prothom Alo",
+      "group": "general",
+      "type": "news",
+      "language": "bn",
+      "notes": "Leading Bengali-language Bangladeshi daily"
+    },
+    {
+      "url": "https://www.dailyamardesh.com/bangladesh",
+      "label": "Daily Amar Desh",
+      "group": "general",
+      "type": "news",
+      "language": "bn",
+      "notes": "Bangladeshi news section"
+    },
+    {
+      "url": "https://Thedailystar.net",
+      "label": "The Daily Star",
+      "group": "general",
+      "type": "news",
+      "language": "en",
+      "notes": "Major English-language Bangladeshi daily"
+    },
+    {
+      "url": "https://www.dhakatribune.com/",
+      "label": "Dhaka Tribune",
+      "group": "general",
+      "type": "news",
+      "language": "en",
+      "notes": "English-language Bangladeshi newspaper"
+    },
+    {
+      "url": "https://www.bdnews24.com",
+      "label": "bdnews24",
+      "group": "general",
+      "type": "news",
+      "language": "en",
+      "notes": "Bangladeshi online news outlet"
+    },
+    {
+      "url": "https://www.unglobalcompact.org/",
+      "label": "UN Global Compact",
+      "group": "general",
+      "type": "other",
+      "language": "en",
+      "notes": "UN corporate sustainability initiative"
+    },
+    {
+      "url": "https://www.bdmilitary.com/",
+      "label": "BD Military",
+      "group": "general",
+      "type": "news",
+      "language": "en",
+      "notes": "Bangladesh defense news outlet"
+    },
+    {
+      "url": "https://afd.gov.bd/news-events",
+      "label": "Armed Forces Division Bangladesh",
+      "group": "general",
+      "type": "government",
+      "language": "en",
+      "notes": "Bangladesh Armed Forces Division news"
+    },
+    {
+      "url": "https://www.turdef.com/country/Bangladesh-news",
+      "label": "Turkish Defence News - Bangladesh",
+      "group": "general",
+      "type": "news",
+      "language": "en",
+      "notes": "Defense news aggregator"
+    },
+    {
+      "url": "https://www.globaldefensecorp.com/tag/bangladesh",
+      "label": "Global Defense Corp - Bangladesh",
+      "group": "general",
+      "type": "news",
+      "language": "en",
+      "notes": "Defense news aggregator"
+    },
+    {
+      "url": "https://ispr.gov.bd/",
+      "label": "ISPR Pakistan",
+      "group": "pakistan_central_asia",
+      "type": "government",
+      "language": "en",
+      "notes": "Pakistan Inter-Services Public Relations"
+    },
+    {
+      "url": "https://defencejournalbd.com/",
+      "label": "Defence Journal BD",
+      "group": "general",
+      "type": "journal",
+      "language": "en",
+      "notes": "Bangladesh defense journal"
+    },
+    {
+      "url": "https://www.presidentsoffice.gov.lk/news/",
+      "label": "President's Office Sri Lanka",
+      "group": "general",
+      "type": "government",
+      "language": "en",
+      "notes": "Sri Lanka presidential office news"
+    },
+    {
+      "url": "https://www.airforce.lk/news-main.php",
+      "label": "Sri Lanka Air Force",
+      "group": "general",
+      "type": "government",
+      "language": "en",
+      "notes": "Sri Lanka Air Force news"
+    },
+    {
+      "url": "https://www.erd.gov.lk/index.php?option=com_content&view=category&layout=blog&id=28&Itemid=225&lang=en",
+      "label": "ERD Sri Lanka",
+      "group": "general",
+      "type": "government",
+      "language": "en",
+      "notes": "Sri Lanka Economic Relations Division"
+    },
+    {
+      "url": "https://www.mod.go.jp/en/",
+      "label": "Japan Ministry of Defense",
+      "group": "general",
+      "type": "government",
+      "language": "en",
+      "notes": "Japan MoD English site"
+    },
+    {
+      "url": "https://www.aspi.org.au/",
+      "label": "ASPI",
+      "group": "general",
+      "type": "think_tank",
+      "language": "en",
+      "notes": "Australian Strategic Policy Institute"
+    },
+    {
+      "url": "https://www.sipri.org/",
+      "label": "SIPRI",
+      "group": "general",
+      "type": "think_tank",
+      "language": "en",
+      "notes": "Stockholm International Peace Research Institute"
+    },
+    {
+      "url": "https://www.biiss.org",
+      "label": "BIISS",
+      "group": "general",
+      "type": "think_tank",
+      "language": "en",
+      "notes": "Bangladesh Institute of International and Strategic Studies"
+    },
+    {
+      "url": "https://idsa.in/",
+      "label": "IDSA",
+      "group": "general",
+      "type": "think_tank",
+      "language": "en",
+      "notes": "Institute for Defence Studies and Analyses"
+    },
+    {
+      "url": "https://northeastlivetv.com/",
+      "label": "northeast live tv",
+      "group": "general",
+      "type": "news",
+      "language": "en",
+      "notes": ""
+    },
+    {
+      "url": "https://mod.gov.np/",
+      "label": "Katmandu Post",
+      "group": "general",
+      "type": "news",
+      "language": "en",
+      "notes": ""
+    },
+    {
+      "url": "https://nepjol.info/",
+      "label": "NepJOL",
+      "group": "general",
+      "type": "news",
+      "language": "en",
+      "notes": ""
+    },
+    {
+      "url": "https://pri.gov.np/",
+      "label": "Policy Research Institute",
+      "group": "general",
+      "type": "news",
+      "language": "en",
+      "notes": ""
+    },
+    {
+      "url": "https://ndri.org.np/",
+      "label": "Nepal Development Research Institute",
+      "group": "general",
+      "type": "news",
+      "language": "en",
+      "notes": ""
+    },
+    {
+      "url": "https://iids.org.np/",
+      "label": "Institute for Integrated Development Studies",
+      "group": "general",
+      "type": "news",
+      "language": "en",
+      "notes": ""
+    },
+    {
+      "url": "https://niice.org.np/",
+      "label": "Nepal Institute for Strategic Studies",
+      "group": "general",
+      "type": "news",
+      "language": "en",
+      "notes": ""
+    }
+  ],
+  "defaults": {
+    "source_type": "direct",
+    "engine": "fast",
+    "ignore_robots": false
+  }
+}

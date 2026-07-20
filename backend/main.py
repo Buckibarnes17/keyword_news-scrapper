@@ -32,20 +32,21 @@ logging.config.dictConfig({
 logger = logging.getLogger("keywordscout.main")
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Dict
-from fastapi import FastAPI, Depends, HTTPException, Query, Response, Request, Security
+from fastapi import FastAPI, Depends, HTTPException, Query, Response, Request, Security, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
+from sqlalchemy import select, update, delete, func
 
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from contextlib import asynccontextmanager
 
-from backend.database import Base, engine, get_db, init_db, SessionLocal
-from backend.models import SearchQuery, CrawledURL, SearchSchedule, KeywordProgress
+from backend.database import Base, engine, init_db, SessionLocal, get_db
+from backend.models import SearchQuery, CrawledURL, SearchSchedule, KeywordProgress, User
 from backend.schemas import (
     SearchQueryCreate, SearchQueryResponse, 
     PaginatedCrawledURLResponse, CrawledURLResponse,
@@ -56,35 +57,114 @@ from backend.queue_manager import start_queue_worker, stop_queue_worker, request
 from backend.scheduler import start_scheduler, stop_scheduler, calculate_next_run
 from backend.exporter import export_results
 
-# Create and migrate database tables on startup
-init_db()
-try:
-    from backend.postgres_integration import init_postgres_db
-    init_postgres_db(verbose=True)
-except Exception as pg_init_err:
-    print(f"[PostgreSQL Warning] Could not initialize database on startup: {pg_init_err}")
+def _get_config_path(filename: str) -> str:
+    """Returns the absolute path to a file inside config/ at the project root."""
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(project_root, "config", filename)
 
-# Bearer Token Auth Logic
-API_TOKEN = os.environ.get("API_TOKEN", "changeme")
-security = HTTPBearer()
+def _read_config_file(filename: str) -> dict:
+    """Reads and parses a JSON file from config/. Raises HTTPException on error."""
+    import json as _json
+    path = _get_config_path(filename)
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404,
+            detail=f"Config file not found: config/{filename}")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return _json.load(f)
+    except Exception as e:
+        raise HTTPException(status_code=422,
+            detail=f"Failed to read config/{filename}: {e}")
 
-def verify_token(credentials: HTTPAuthorizationCredentials = Security(security)):
-    if credentials.credentials != API_TOKEN:
-        raise HTTPException(status_code=401, detail="Invalid or missing API token.")
-    return credentials.credentials
+def _write_config_file(filename: str, data: dict) -> None:
+    """Writes a dict to a JSON file in config/ atomically. Raises HTTPException on error."""
+    import json as _json
+    import tempfile
+    path = _get_config_path(filename)
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        dir_name = os.path.dirname(path)
+        with tempfile.NamedTemporaryFile("w", dir=dir_name, delete=False, encoding="utf-8", suffix=".tmp") as f:
+            _json.dump(data, f, indent=2, ensure_ascii=False)
+            temp_path = f.name
+        os.replace(temp_path, path)
+    except Exception as e:
+        if 'temp_path' in locals() and os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except Exception:
+                pass
+        raise HTTPException(status_code=500,
+            detail=f"Failed to write config/{filename}: {e}")
+
+def initialize_app_state():
+    """Initializes app state: database tables, postgres db connection, and config files."""
+    # Ensure config/keywords.json exists on startup atomically
+    _kw_config_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "config", "keywords.json"
+    )
+    if not os.path.exists(_kw_config_path):
+        import json as _json
+        import tempfile
+        os.makedirs(os.path.dirname(_kw_config_path), exist_ok=True)
+        _default_kw = {
+            "version": "1.0",
+            "description": "KeywordScout keyword config — add keywords via the Config Manager page",
+            "keywords": [],
+            "groups": {
+                "china": "China-related keywords",
+                "myanmar": "Myanmar-related keywords",
+                "northeast_india": "Northeast India keywords",
+                "pakistan_central_asia": "Pakistan and Central Asia keywords",
+                "general": "General monitoring keywords"
+            }
+        }
+        dir_name = os.path.dirname(_kw_config_path)
+        try:
+            with tempfile.NamedTemporaryFile("w", dir=dir_name, delete=False, encoding="utf-8", suffix=".tmp") as _f:
+                _json.dump(_default_kw, _f, indent=2, ensure_ascii=False)
+                temp_path = _f.name
+            os.replace(temp_path, _kw_config_path)
+            logger.info("[Config] Created default config/keywords.json")
+        except Exception as e:
+            if 'temp_path' in locals() and os.path.exists(temp_path):
+                os.remove(temp_path)
+            raise e
+
+    # Initialize databases
+    init_db()
+    try:
+        from backend.postgres_integration import init_postgres_db
+        init_postgres_db(verbose=True)
+    except Exception as pg_init_err:
+        print(f"[PostgreSQL Warning] Could not initialize database on startup: {pg_init_err}")
+
+# JWT Auth Logic & Helper Imports
+from backend.auth import (
+    get_current_user,
+    verify_password,
+    get_password_hash,
+    create_access_token,
+    create_refresh_token,
+    JWT_SECRET,
+    ALGORITHM
+)
+from backend.schemas import UserCreate, UserResponse, TokenResponse, RefreshTokenRequest
+from jose import jwt, JWTError
 
 # Stuck Job Recovery Logic
 def recover_stuck_jobs():
     db = SessionLocal()
     try:
-        stuck = db.query(SearchQuery).filter(SearchQuery.status == "processing").all()
+        stuck = db.scalars(select(SearchQuery).where(SearchQuery.status == "processing")).all()
         for job in stuck:
-            job.status = "pending"
+            job.status = "failed"
             job.error_message = "Recovered after server restart."
             job.updated_at = datetime.now(timezone.utc)
         if stuck:
             db.commit()
-            print(f"[Recovery] Reset {len(stuck)} stuck jobs to pending.")
+            print(f"[Recovery] Reset {len(stuck)} stuck jobs to failed.")
     except Exception as e:
         print(f"[Recovery Error] Failed to recover stuck jobs: {e}")
     finally:
@@ -93,6 +173,7 @@ def recover_stuck_jobs():
 # Lifespan context manager replacing startup/shutdown events
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    initialize_app_state()
     recover_stuck_jobs()
     start_queue_worker()
     start_scheduler()
@@ -139,6 +220,12 @@ from fastapi.exceptions import RequestValidationError
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
     logger.exception("Unhandled exception on %s %s", request.method, request.url.path)
+    db = request.state.__dict__.get("db")
+    if db:
+        try:
+            db.close()
+        except Exception:
+            pass
     return JSONResponse(
         status_code=500,
         content={"detail": f"Internal server error: {type(exc).__name__}: {str(exc)}"}
@@ -151,9 +238,73 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 # REST APIs
 
+@app.post("/api/auth/signup", response_model=UserResponse)
+def signup(payload: UserCreate, db: Session = Depends(get_db)):
+    # Check if user already exists
+    existing_user = db.scalars(select(User).where(User.email == payload.email)).first()
+    if existing_user:
+        raise HTTPException(status_code=409, detail="Email already registered")
+    
+    hashed_pwd = get_password_hash(payload.password)
+    new_user = User(email=payload.email, hashed_password=hashed_pwd)
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+    return new_user
+
+@app.post("/api/auth/login", response_model=TokenResponse)
+def login(payload: UserCreate, db: Session = Depends(get_db)):
+    user = db.scalars(select(User).where(User.email == payload.email)).first()
+    if not user or not verify_password(payload.password, user.hashed_password):
+        raise HTTPException(status_code=401, detail="Incorrect email or password")
+    
+    access_token = create_access_token(data={"sub": user.email})
+    refresh_token = create_refresh_token(data={"sub": user.email})
+    return {
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "token_type": "bearer"
+    }
+
+@app.post("/api/auth/refresh", response_model=TokenResponse)
+def refresh(payload: RefreshTokenRequest, db: Session = Depends(get_db)):
+    credentials_exception = HTTPException(
+        status_code=401,
+        detail="Could not validate refresh credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        token_payload = jwt.decode(payload.refresh_token, JWT_SECRET, algorithms=[ALGORITHM])
+        email: str = token_payload.get("sub")
+        token_type: str = token_payload.get("type")
+        if email is None or token_type != "refresh":
+            raise credentials_exception
+    except JWTError:
+        raise credentials_exception
+        
+    user = db.scalars(select(User).where(User.email == email)).first()
+    if not user:
+        raise credentials_exception
+        
+    access_token = create_access_token(data={"sub": user.email})
+    new_refresh_token = create_refresh_token(data={"sub": user.email})
+    return {
+        "access_token": access_token,
+        "refresh_token": new_refresh_token,
+        "token_type": "bearer"
+    }
+
+@app.get("/api/auth/me", response_model=UserResponse)
+def me(current_user: User = Depends(get_current_user)):
+    return current_user
+
+@app.post("/api/auth/logout")
+def logout():
+    return {"detail": "Successfully logged out"}
+
 @app.post("/api/search", response_model=SearchQueryResponse)
 @limiter.limit("10/minute")
-def create_search(request: Request, payload: SearchQueryCreate, db: Session = Depends(get_db), token: str = Depends(verify_token)):
+def create_search(request: Request, payload: SearchQueryCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """
     Submits a search crawl request.
     Can be a web search or a custom list of raw URLs/sitemaps.
@@ -213,6 +364,579 @@ def get_tor_status():
         "tor_host": "127.0.0.1"
     }
 
+@app.get("/api/config/urls")
+def get_config_urls():
+    """
+    Reads and returns the contents of config/urls.json.
+    Used by the Config File tab in the New Crawl view to load available URLs.
+
+    Returns the parsed JSON directly.
+    Raises HTTP 404 if the file does not exist.
+    Raises HTTP 422 if the file exists but is not valid JSON.
+    """
+    import json
+    import os
+
+    # Resolve path: config/urls.json relative to this file's parent's parent
+    # i.e. project_root/config/urls.json
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    config_path  = os.path.join(project_root, "config", "urls.json")
+
+    if not os.path.exists(config_path):
+        from fastapi import HTTPException
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"Config file not found at {config_path}. "
+                "Create config/urls.json at the project root."
+            )
+        )
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data
+    except json.JSONDecodeError as e:
+        from fastapi import HTTPException
+        raise HTTPException(
+            status_code=422,
+            detail=f"config/urls.json is not valid JSON: {e}"
+        )
+    except Exception as e:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=500, detail=f"Failed to read config file: {e}")
+
+@app.post("/api/config/urls/validate")
+def validate_config_urls(payload: dict):
+    """
+    Validates a config/urls.json payload against the expected schema.
+    Returns validation result — does NOT write to disk.
+
+    Expected shape: { "urls": [...], "groups": {...}, "defaults": {...} }
+    """
+    errors = []
+
+    if "urls" not in payload or not isinstance(payload["urls"], list):
+        errors.append("Missing or invalid 'urls' array.")
+
+    if "groups" not in payload or not isinstance(payload["groups"], dict):
+        errors.append("Missing or invalid 'groups' object.")
+
+    required_url_fields = {"url", "label", "group", "type", "language"}
+    for i, entry in enumerate(payload.get("urls", [])):
+        missing = required_url_fields - set(entry.keys())
+        if missing:
+            errors.append(f"URL entry #{i+1} missing fields: {', '.join(sorted(missing))}")
+        if "url" in entry and not entry["url"].startswith(("http://", "https://")):
+            errors.append(f"URL entry #{i+1} has invalid URL: {entry['url']}")
+
+    if errors:
+        return {"valid": False, "errors": errors, "url_count": 0}
+
+    return {
+        "valid":     True,
+        "errors":    [],
+        "url_count": len(payload.get("urls", [])),
+        "groups":    list(payload.get("groups", {}).keys())
+    }
+
+@app.post("/api/config/urls/upload")
+async def upload_config_urls(file: UploadFile = File(...)):
+    """
+    Accepts an uploaded urls.json file, parses it, validates its schema,
+    and returns the parsed content.
+
+    The file is NOT written to disk — it is only parsed and returned.
+    The client can then use the returned data to populate the config UI.
+
+    Returns:
+        {"valid": true,  "data": {...parsed config...}, "url_count": N}
+        {"valid": false, "errors": [...], "data": null}
+    """
+    import json as _json
+
+    # Enforce .json extension (browsers may send application/octet-stream)
+    if file.filename and not file.filename.lower().endswith(".json"):
+        return {
+            "valid": False,
+            "errors": [f"File must be a .json file. Got: {file.filename}"],
+            "data": None,
+            "url_count": 0
+        }
+
+    # Read the file content
+    try:
+        contents = await file.read()
+        if len(contents) > 5 * 1024 * 1024:   # 5MB hard limit
+            return {
+                "valid": False,
+                "errors": ["File too large. Maximum allowed size is 5MB."],
+                "data": None,
+                "url_count": 0
+            }
+    except Exception as e:
+        return {"valid": False, "errors": [f"Failed to read file: {e}"],
+                "data": None, "url_count": 0}
+
+    # Parse JSON
+    try:
+        data = _json.loads(contents.decode("utf-8"))
+    except (_json.JSONDecodeError, UnicodeDecodeError) as e:
+        return {
+            "valid": False,
+            "errors": [f"Invalid JSON: {e}"],
+            "data": None,
+            "url_count": 0
+        }
+
+    # Validate schema
+    errors = []
+    if "urls" not in data or not isinstance(data["urls"], list):
+        errors.append("Missing or invalid 'urls' array.")
+    if "groups" not in data or not isinstance(data["groups"], dict):
+        errors.append("Missing or invalid 'groups' object.")
+
+    required_fields = {"url", "label", "group", "type", "language"}
+    for i, entry in enumerate(data.get("urls", [])):
+        missing = required_fields - set(entry.keys())
+        if missing:
+            errors.append(
+                f"URL entry #{i+1} ('{entry.get('label','?')}') "
+                f"missing fields: {', '.join(sorted(missing))}"
+            )
+        url_val = entry.get("url", "")
+        if url_val and not url_val.startswith(("http://", "https://")):
+            errors.append(
+                f"URL entry #{i+1} has invalid URL (must start with http:// or https://): {url_val}"
+            )
+
+    if errors:
+        return {"valid": False, "errors": errors, "data": None, "url_count": 0}
+
+    return {
+        "valid":     True,
+        "errors":    [],
+        "data":      data,
+        "url_count": len(data.get("urls", [])),
+        "groups":    list(data.get("groups", {}).keys())
+    }
+
+
+# ── Keywords config CRUD ──────────────────────────────────────────────────────
+
+@app.get("/api/config/keywords")
+def get_config_keywords():
+    """
+    Returns the full contents of config/keywords.json.
+    Creates the file with defaults if it does not exist yet.
+    """
+    path = _get_config_path("keywords.json")
+    if not os.path.exists(path):
+        default = {
+            "version": "1.0",
+            "description": "KeywordScout keyword config — add keywords via the Config Manager page",
+            "keywords": [],
+            "groups": {
+                "china": "China-related keywords",
+                "myanmar": "Myanmar-related keywords",
+                "northeast_india": "Northeast India keywords",
+                "pakistan_central_asia": "Pakistan and Central Asia keywords",
+                "general": "General monitoring keywords"
+            }
+        }
+        _write_config_file("keywords.json", default)
+        return default
+    return _read_config_file("keywords.json")
+
+
+@app.post("/api/config/keywords")
+def add_config_keyword(entry: dict):
+    """
+    Appends a new keyword entry to config/keywords.json.
+    Required fields: keyword (str), group (str), match_type (str), notes (str).
+    Returns the updated keywords list.
+    """
+    required = {"keyword", "group", "match_type"}
+    missing = required - set(entry.keys())
+    if missing:
+        raise HTTPException(status_code=422,
+            detail=f"Missing required fields: {', '.join(sorted(missing))}")
+    if not entry.get("keyword", "").strip():
+        raise HTTPException(status_code=422, detail="keyword cannot be empty.")
+    if entry.get("match_type") not in ("phrase", "boolean"):
+        raise HTTPException(status_code=422,
+            detail="match_type must be 'phrase' or 'boolean'.")
+
+    data        = _read_config_file("keywords.json")
+    group_key   = entry.get("group", "general").strip()
+    group_label = entry.get("group_label", "").strip()
+
+    new_entry = {
+        "keyword":    entry["keyword"].strip(),
+        "group":      group_key,
+        "match_type": entry["match_type"],
+        "notes":      entry.get("notes", "")
+    }
+    data.setdefault("keywords", []).append(new_entry)
+
+    # Persist new custom group into data["groups"] if it doesn't already exist
+    data.setdefault("groups", {})
+    if group_key and group_key not in data["groups"]:
+        data["groups"][group_key] = group_label or group_key.replace("_", " ").title()
+        logger.info("[Config] New group added to keywords.json: %s = %s",
+                    group_key, data["groups"][group_key])
+
+    _write_config_file("keywords.json", data)
+    return {
+        "success":  True,
+        "keywords": data["keywords"],
+        "groups":   data["groups"]
+    }
+
+
+@app.post("/api/config/keywords/bulk")
+def add_config_keywords_bulk(payload: dict):
+    """
+    Accepts list of keyword entries, validates them,
+    and appends the successful ones to config/keywords.json.
+    Payload: {"keywords": [ {keyword, group, match_type, notes}, ... ]}
+    """
+    entries = payload.get("keywords", [])
+    if not isinstance(entries, list):
+        raise HTTPException(status_code=422, detail="keywords must be a list")
+        
+    if len(entries) > 500:
+        raise HTTPException(status_code=400, detail="Batch exceeds the limit of 500 entries.")
+
+    data = _read_config_file("keywords.json")
+    
+    added = []
+    skipped = []
+    
+    required = {"keyword", "group", "match_type"}
+    
+    for item in entries:
+        missing = required - set(item.keys())
+        if not missing:
+            empty = [f for f in required if not str(item.get(f, "")).strip()]
+            if empty:
+                skipped.append({
+                    "entry": item,
+                    "reason": f"Missing required fields: {', '.join(sorted(empty))}"
+                })
+                continue
+        else:
+            skipped.append({
+                "entry": item,
+                "reason": f"Missing required fields: {', '.join(sorted(missing))}"
+            })
+            continue
+            
+        keyword_val = item.get("keyword", "").strip()
+        if not keyword_val:
+            skipped.append({
+                "entry": item,
+                "reason": "keyword cannot be empty."
+            })
+            continue
+            
+        match_type_val = item.get("match_type")
+        if match_type_val not in ("phrase", "boolean"):
+            skipped.append({
+                "entry": item,
+                "reason": "match_type must be 'phrase' or 'boolean'."
+            })
+            continue
+            
+        group_key = item.get("group", "general").strip()
+        group_label = item.get("group_label", "").strip()
+        new_entry = {
+            "keyword":    keyword_val,
+            "group":      group_key,
+            "match_type": match_type_val,
+            "notes":      item.get("notes", "")
+        }
+        data.setdefault("keywords", []).append(new_entry)
+        added.append(new_entry)
+
+        # Persist new custom group if it doesn't already exist
+        data.setdefault("groups", {})
+        if group_key and group_key not in data["groups"]:
+            data["groups"][group_key] = group_label or group_key.replace("_", " ").title()
+            logger.info("[Config] New group added to keywords.json (bulk): %s = %s",
+                        group_key, data["groups"][group_key])
+        
+    if added:
+        _write_config_file("keywords.json", data)
+        
+    return {
+        "success": True,
+        "added": added,
+        "skipped": skipped,
+        "keywords": data.get("keywords", []),
+        "groups": data.get("groups", {})
+    }
+
+
+@app.put("/api/config/keywords/{index}")
+def update_config_keyword(index: int, entry: dict):
+    """
+    Updates the keyword entry at position `index` in config/keywords.json.
+    Returns the updated keywords list.
+    """
+    data = _read_config_file("keywords.json")
+    keywords = data.get("keywords", [])
+    if index < 0 or index >= len(keywords):
+        raise HTTPException(status_code=404,
+            detail=f"No keyword at index {index}.")
+    if not entry.get("keyword", "").strip():
+        raise HTTPException(status_code=422, detail="keyword cannot be empty.")
+    group_key   = entry.get("group", keywords[index].get("group", "general")).strip()
+    group_label = entry.get("group_label", "").strip()
+
+    keywords[index] = {
+        "keyword":    entry.get("keyword", keywords[index]["keyword"]).strip(),
+        "group":      group_key,
+        "match_type": entry.get("match_type", keywords[index].get("match_type", "phrase")),
+        "notes":      entry.get("notes", keywords[index].get("notes", ""))
+    }
+    data["keywords"] = keywords
+
+    # Persist new custom group if it doesn't already exist
+    data.setdefault("groups", {})
+    if group_key and group_key not in data["groups"]:
+        data["groups"][group_key] = group_label or group_key.replace("_", " ").title()
+        logger.info("[Config] New group added to keywords.json (update): %s = %s",
+                    group_key, data["groups"][group_key])
+
+    _write_config_file("keywords.json", data)
+    return {
+        "success":  True,
+        "keywords": keywords,
+        "groups":   data["groups"]
+    }
+
+
+@app.delete("/api/config/keywords/{index}")
+def delete_config_keyword(index: int):
+    """
+    Deletes the keyword entry at position `index` from config/keywords.json.
+    Returns the updated keywords list.
+    """
+    data = _read_config_file("keywords.json")
+    keywords = data.get("keywords", [])
+    if index < 0 or index >= len(keywords):
+        raise HTTPException(status_code=404,
+            detail=f"No keyword at index {index}.")
+    removed = keywords.pop(index)
+    data["keywords"] = keywords
+    _write_config_file("keywords.json", data)
+    return {"success": True, "removed": removed, "keywords": keywords}
+
+
+# ── URLs config CRUD ──────────────────────────────────────────────────────────
+
+@app.post("/api/config/urls")
+def add_config_url(entry: dict):
+    """
+    Appends a new URL entry to config/urls.json.
+    Required fields: url, label, group, type, language.
+    Returns the updated urls list.
+    """
+    required = {"url", "label", "group", "type", "language"}
+    missing = required - set(entry.keys())
+    if missing:
+        raise HTTPException(status_code=422,
+            detail=f"Missing required fields: {', '.join(sorted(missing))}")
+    url_val = entry.get("url", "").strip()
+    if not url_val.startswith(("http://", "https://")):
+        raise HTTPException(status_code=422,
+            detail="url must start with http:// or https://")
+
+    data = _read_config_file("urls.json")
+    # Check for duplicate URL
+    existing_urls = [e.get("url") for e in data.get("urls", [])]
+    if url_val in existing_urls:
+        raise HTTPException(status_code=409,
+            detail=f"URL already exists in config: {url_val}")
+
+    group_key   = entry.get("group", "general").strip()
+    group_label = entry.get("group_label", "").strip()
+
+    new_entry = {
+        "url":      url_val,
+        "label":    entry.get("label", "").strip(),
+        "group":    group_key,
+        "type":     entry.get("type", "news"),
+        "language": entry.get("language", "en"),
+        "notes":    entry.get("notes", "")
+    }
+    data.setdefault("urls", []).append(new_entry)
+
+    # Persist new custom group into data["groups"] if it doesn't already exist
+    data.setdefault("groups", {})
+    if group_key and group_key not in data["groups"]:
+        # Use provided label, or fall back to prettifying the slug
+        data["groups"][group_key] = group_label or group_key.replace("_", " ").title()
+        logger.info("[Config] New group added to urls.json: %s = %s",
+                    group_key, data["groups"][group_key])
+
+    _write_config_file("urls.json", data)
+    return {
+        "success": True,
+        "urls":    data["urls"],
+        "groups":  data["groups"]   # return updated groups so frontend can refresh dropdown
+    }
+
+
+@app.post("/api/config/urls/bulk")
+def add_config_urls_bulk(payload: dict):
+    """
+    Accepts list of URL entries, validates and dedupes them,
+    and appends the successful ones to config/urls.json.
+    Payload: {"urls": [ {url, label, group, type, language, notes}, ... ]}
+    """
+    entries = payload.get("urls", [])
+    if not isinstance(entries, list):
+        raise HTTPException(status_code=422, detail="urls must be a list")
+    
+    if len(entries) > 500:
+        raise HTTPException(status_code=400, detail="Batch exceeds the limit of 500 entries.")
+
+    data = _read_config_file("urls.json")
+    existing_urls = {e.get("url") for e in data.get("urls", [])}
+    
+    added = []
+    skipped = []
+    seen_in_batch = set()
+    
+    required = {"url", "label", "group", "type", "language"}
+    
+    for item in entries:
+        missing = required - set(item.keys())
+        if not missing:
+            empty = [f for f in required if not str(item.get(f, "")).strip()]
+            if empty:
+                skipped.append({
+                    "entry": item,
+                    "reason": f"Missing required fields: {', '.join(sorted(empty))}"
+                })
+                continue
+        else:
+            skipped.append({
+                "entry": item,
+                "reason": f"Missing required fields: {', '.join(sorted(missing))}"
+            })
+            continue
+
+        url_val = item.get("url", "").strip()
+        
+        if not url_val.startswith(("http://", "https://")):
+            skipped.append({
+                "entry": item,
+                "reason": "invalid URL format"
+            })
+            continue
+            
+        if url_val in seen_in_batch:
+            skipped.append({
+                "entry": item,
+                "reason": "duplicate in batch"
+            })
+            continue
+            
+        if url_val in existing_urls:
+            skipped.append({
+                "entry": item,
+                "reason": "duplicate"
+            })
+            continue
+            
+        group_key = item.get("group", "general").strip()
+        group_label = item.get("group_label", "").strip()
+        new_entry = {
+            "url":      url_val,
+            "label":    item.get("label", "").strip(),
+            "group":    group_key,
+            "type":     item.get("type", "news"),
+            "language": item.get("language", "en"),
+            "notes":    item.get("notes", "")
+        }
+        data.setdefault("urls", []).append(new_entry)
+        added.append(new_entry)
+
+        # Persist new custom group if it doesn't already exist
+        data.setdefault("groups", {})
+        if group_key and group_key not in data["groups"]:
+            data["groups"][group_key] = group_label or group_key.replace("_", " ").title()
+            logger.info("[Config] New group added to urls.json (bulk): %s = %s",
+                        group_key, data["groups"][group_key])
+        
+    if added:
+        _write_config_file("urls.json", data)
+        
+    return {
+        "success": True,
+        "added": added,
+        "skipped": skipped,
+        "urls": data.get("urls", []),
+        "groups": data.get("groups", {})
+    }
+
+
+@app.delete("/api/config/urls/{index}")
+def delete_config_url(index: int):
+    """
+    Deletes the URL entry at position `index` from config/urls.json.
+    Returns the updated urls list.
+    """
+    data = _read_config_file("urls.json")
+    urls = data.get("urls", [])
+    if index < 0 or index >= len(urls):
+        raise HTTPException(status_code=404,
+            detail=f"No URL at index {index}.")
+    removed = urls.pop(index)
+    data["urls"] = urls
+    _write_config_file("urls.json", data)
+    return {"success": True, "removed": removed, "urls": urls}
+
+
+@app.put("/api/config/urls/groups/{group_key}")
+def update_url_group_label(group_key: str, payload: dict):
+    """
+    Updates the human-readable label for an existing group in urls.json.
+    Payload: { "label": "New Label" }
+    Does NOT rename the group key on entries — only updates the display label.
+    """
+    data = _read_config_file("urls.json")
+    if group_key not in data.get("groups", {}):
+        raise HTTPException(status_code=404,
+            detail=f"Group '{group_key}' not found in urls.json")
+    new_label = payload.get("label", "").strip()
+    if not new_label:
+        raise HTTPException(status_code=422, detail="label cannot be empty.")
+    data["groups"][group_key] = new_label
+    _write_config_file("urls.json", data)
+    return {"success": True, "groups": data["groups"]}
+
+
+@app.put("/api/config/keywords/groups/{group_key}")
+def update_keyword_group_label(group_key: str, payload: dict):
+    """
+    Updates the human-readable label for an existing group in keywords.json.
+    Payload: { "label": "New Label" }
+    """
+    data = _read_config_file("keywords.json")
+    if group_key not in data.get("groups", {}):
+        raise HTTPException(status_code=404,
+            detail=f"Group '{group_key}' not found in keywords.json")
+    new_label = payload.get("label", "").strip()
+    if not new_label:
+        raise HTTPException(status_code=422, detail="label cannot be empty.")
+    data["groups"][group_key] = new_label
+    _write_config_file("keywords.json", data)
+    return {"success": True, "groups": data["groups"]}
+
+
 @app.get("/api/health")
 def health_check(db: Session = Depends(get_db)):
     """Returns system health: DB connectivity and worker status."""
@@ -235,14 +959,14 @@ def health_check(db: Session = Depends(get_db)):
 @limiter.limit("30/minute")
 def get_search_history(request: Request, db: Session = Depends(get_db)):
     """Returns all historical search query records."""
-    queries = db.query(SearchQuery).order_by(SearchQuery.created_at.desc()).all()
+    queries = db.scalars(select(SearchQuery).order_by(SearchQuery.created_at.desc())).all()
     return queries
 
 @app.delete("/api/search/{search_id}")
 @limiter.limit("10/minute")
-def delete_search(request: Request, search_id: int, db: Session = Depends(get_db), token: str = Depends(verify_token)):
+def delete_search(request: Request, search_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Deletes a search query record and all its crawled URLs."""
-    query = db.query(SearchQuery).filter(SearchQuery.id == search_id).first()
+    query = db.scalars(select(SearchQuery).where(SearchQuery.id == search_id)).first()
     if not query:
         raise HTTPException(status_code=404, detail="Search query not found")
     db.delete(query)
@@ -251,9 +975,9 @@ def delete_search(request: Request, search_id: int, db: Session = Depends(get_db
 
 @app.post("/api/search/{search_id}/stop")
 @limiter.limit("10/minute")
-def stop_search(request: Request, search_id: int, db: Session = Depends(get_db), token: str = Depends(verify_token)):
+def stop_search(request: Request, search_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Gracefully aborts a search query run."""
-    query = db.query(SearchQuery).filter(SearchQuery.id == search_id).first()
+    query = db.scalars(select(SearchQuery).where(SearchQuery.id == search_id)).first()
     if not query:
         raise HTTPException(status_code=404, detail="Search query not found")
         
@@ -271,9 +995,9 @@ def stop_search(request: Request, search_id: int, db: Session = Depends(get_db),
 
 @app.post("/api/search/{search_id}/retry", response_model=SearchQueryResponse)
 @limiter.limit("10/minute")
-def retry_search(request: Request, search_id: int, db: Session = Depends(get_db), token: str = Depends(verify_token)):
+def retry_search(request: Request, search_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Duplicates a past search run config and creates a new pending run."""
-    old_query = db.query(SearchQuery).filter(SearchQuery.id == search_id).first()
+    old_query = db.scalars(select(SearchQuery).where(SearchQuery.id == search_id)).first()
     if not old_query:
         raise HTTPException(status_code=404, detail="Search query not found")
         
@@ -343,29 +1067,29 @@ def get_search_results(
     """
     Returns search query status metadata and a paginated, filterable list of crawled URLs.
     """
-    query_record = db.query(SearchQuery).filter(SearchQuery.id == search_id).first()
+    query_record = db.scalars(select(SearchQuery).where(SearchQuery.id == search_id)).first()
     if not query_record:
         raise HTTPException(status_code=404, detail="Search query not found")
 
     # Start building base query for CrawledURL
-    crawled_base_query = db.query(CrawledURL).filter(
-        CrawledURL.search_id == search_id
-    )
+    stmt = select(CrawledURL).where(CrawledURL.search_id == search_id)
 
     # Apply filters
     if domain_query:
-        crawled_base_query = crawled_base_query.filter(CrawledURL.domain.contains(domain_query.lower()))
+        stmt = stmt.where(CrawledURL.domain.contains(domain_query.lower()))
     if min_relevance is not None:
-        crawled_base_query = crawled_base_query.filter(CrawledURL.relevance_score >= min_relevance)
+        stmt = stmt.where(CrawledURL.relevance_score >= min_relevance)
 
     # Count total matched before paginating
-    total_count = crawled_base_query.count()
+    count_stmt = select(func.count()).select_from(stmt.subquery())
+    total_count = db.execute(count_stmt).scalar() or 0
 
     # Paginated results (order by relevance score desc, with error items at bottom)
-    results = crawled_base_query.order_by(
+    results_stmt = stmt.order_by(
         CrawledURL.relevance_score.desc(),
         CrawledURL.discovered_at.desc()
-    ).offset((page - 1) * limit).limit(limit).all()
+    ).offset((page - 1) * limit).limit(limit)
+    results = db.scalars(results_stmt).all()
 
     # Form response dict containing query meta and list of crawled items
     return {
@@ -406,7 +1130,7 @@ def export_search(
     sort_by: Optional[str] = Query(None),
     sort_desc: bool = Query(True),
     db: Session = Depends(get_db),
-    token: str = Depends(verify_token)
+    current_user: User = Depends(get_current_user)
 ):
     """
     Generates and streams an export file (CSV, XLSX, JSON, Parquet) for a search.
@@ -427,7 +1151,7 @@ def export_search(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Export failed: {str(e)}")
 
-    query_record = db.query(SearchQuery).filter(SearchQuery.id == search_id).first()
+    query_record = db.scalars(select(SearchQuery).where(SearchQuery.id == search_id)).first()
     keyword_clean = "".join(c for c in query_record.keyword if c.isalnum() or c in (" ", "_", "-")).strip().replace(" ", "_")
     filename = f"keyword_results_{search_id}_{keyword_clean}.{format}"
     
@@ -439,7 +1163,7 @@ def export_search(
 
 @app.post("/api/export/{search_id}/postgres")
 @limiter.limit("10/minute")
-def export_search_postgres(request: Request, search_id: int, db: Session = Depends(get_db), token: str = Depends(verify_token)):
+def export_search_postgres(request: Request, search_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """
     Exports crawling results for a query into the configured PostgreSQL database.
     """
@@ -455,14 +1179,17 @@ def export_search_postgres(request: Request, search_id: int, db: Session = Depen
 
 @app.post("/api/schedules", response_model=SearchScheduleResponse)
 @limiter.limit("10/minute")
-def create_schedule(request: Request, payload: SearchScheduleCreate, db: Session = Depends(get_db), token: str = Depends(verify_token)):
+def create_schedule(request: Request, payload: SearchScheduleCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Creates a new recurring keyword search schedule."""
     # Clean keyword
     kw_clean = (payload.keyword or "").strip()
     payload.keyword = kw_clean
     payload.config.keyword = (payload.config.keyword or "").strip()
 
-    # Validate config mode parameters
+    # Allow "config" source type — URLs resolved at trigger time
+    if payload.config.source_type not in ("search", "direct", "sitemap", "feed", "config"):
+        raise HTTPException(status_code=400, detail="Invalid source_type")
+
     if payload.config.source_type == "search" and not payload.config.keyword:
         raise HTTPException(status_code=400, detail="keyword is required for web search schedule mode")
         
@@ -502,14 +1229,14 @@ def create_schedule(request: Request, payload: SearchScheduleCreate, db: Session
 @limiter.limit("30/minute")
 def list_schedules(request: Request, db: Session = Depends(get_db)):
     """Lists all active and inactive schedules."""
-    schedules = db.query(SearchSchedule).order_by(SearchSchedule.created_at.desc()).all()
+    schedules = db.scalars(select(SearchSchedule).order_by(SearchSchedule.created_at.desc())).all()
     return schedules
 
 @app.delete("/api/schedules/{schedule_id}")
 @limiter.limit("10/minute")
-def delete_schedule(request: Request, schedule_id: int, db: Session = Depends(get_db), token: str = Depends(verify_token)):
+def delete_schedule(request: Request, schedule_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Deletes a schedule."""
-    sched = db.query(SearchSchedule).filter(SearchSchedule.id == schedule_id).first()
+    sched = db.scalars(select(SearchSchedule).where(SearchSchedule.id == schedule_id)).first()
     if not sched:
         raise HTTPException(status_code=404, detail="Schedule not found")
     db.delete(sched)
@@ -518,7 +1245,7 @@ def delete_schedule(request: Request, schedule_id: int, db: Session = Depends(ge
 
 @app.post("/api/scrape", response_model=FirecrawlResponse)
 @limiter.limit("10/minute")
-def scrape_url(request: Request, payload: ScrapeRequest, token: str = Depends(verify_token)):
+def scrape_url(request: Request, payload: ScrapeRequest, current_user: User = Depends(get_current_user)):
     """
     Live scrapes any target URL and formats the response according to the Firecrawl schema.
     """
@@ -550,7 +1277,7 @@ def get_crawled_url_as_firecrawl(request: Request, url_id: int, db: Session = De
     Retrieves a crawled URL record from the database and returns it structured
     according to the Firecrawl response schema.
     """
-    crawled_url = db.query(CrawledURL).filter(CrawledURL.id == url_id).first()
+    crawled_url = db.scalars(select(CrawledURL).where(CrawledURL.id == url_id)).first()
     if not crawled_url:
         raise HTTPException(status_code=404, detail="Crawled URL not found")
 

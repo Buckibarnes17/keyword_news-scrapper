@@ -8,6 +8,7 @@ import json
 import threading
 from datetime import datetime, timedelta, timezone
 from sqlalchemy.orm import Session
+from sqlalchemy import select
 from backend.database import SessionLocal
 from backend.models import SearchSchedule, SearchQuery
 
@@ -94,18 +95,58 @@ def trigger_scheduled_search(db: Session, schedule: SearchSchedule):
         print(f"Error reading configuration for schedule {schedule.id}: {e}")
         return
 
+    source_type = config.get("source_type", "search")
+    direct_urls_value = config.get("direct_urls")
+    keyword_value = schedule.keyword
+
+    if source_type == "config":
+        # Resolve config files at trigger time
+        import os, json as _json
+        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        
+        # Load URLs from config/urls.json
+        urls_path = os.path.join(project_root, "config", "urls.json")
+        try:
+            with open(urls_path, "r", encoding="utf-8") as f:
+                urls_data = _json.load(f)
+            direct_urls_value = "\n".join(
+                e["url"] for e in urls_data.get("urls", [])
+                if e.get("url", "").startswith("http")
+            )
+        except Exception as e:
+            print(f"[Scheduler] Failed to load config/urls.json: {e}")
+            direct_urls_value = ""
+        
+        # Load keywords from config/keywords.json (unless an override was saved)
+        if not keyword_value or keyword_value == "__config__":
+            kw_path = os.path.join(project_root, "config", "keywords.json")
+            try:
+                with open(kw_path, "r", encoding="utf-8") as f:
+                    kw_data = _json.load(f)
+                keyword_value = ",".join(
+                    e["keyword"] for e in kw_data.get("keywords", [])
+                    if e.get("keyword", "").strip()
+                )
+            except Exception as e:
+                print(f"[Scheduler] Failed to load config/keywords.json: {e}")
+                keyword_value = ""
+        
+        # Override source_type to 'direct' for the actual SearchQuery
+        source_type = "direct"
+
     # Create new search query in pending state
     new_query = SearchQuery(
-        keyword=schedule.keyword,
+        keyword=keyword_value,
         match_type=config.get("match_type", "phrase"),
         case_sensitive=config.get("case_sensitive", False),
         exact_match=config.get("exact_match", False),
         domains_filter=json.dumps(config.get("domains_filter")) if config.get("domains_filter") else None,
         languages_filter=json.dumps(config.get("languages_filter")) if config.get("languages_filter") else None,
         engine=schedule.engine,
-        source_type=config.get("source_type", "search"),
-        direct_urls=config.get("direct_urls"),
+        source_type=source_type,
+        direct_urls=direct_urls_value,
         ignore_robots=config.get("ignore_robots", False),
+        proxy_url=config.get("proxy_url"),
         status="pending"
     )
     
@@ -138,10 +179,10 @@ def scheduler_loop():
         try:
             now = datetime.now(timezone.utc)
             # Find active schedules that are past due
-            due_schedules = db.query(SearchSchedule).filter(
+            due_schedules = db.scalars(select(SearchSchedule).where(
                 SearchSchedule.active == True,
                 SearchSchedule.next_run <= now
-            ).all()
+            )).all()
             
             for schedule in due_schedules:
                 trigger_scheduled_search(db, schedule)

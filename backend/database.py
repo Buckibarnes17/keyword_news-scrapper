@@ -59,6 +59,7 @@ def init_db():
         print(f"[PostgreSQL Warning] Database precheck error: {e}")
 
     # Create tables
+    from backend.models import User, SearchQuery, CrawledURL, SearchSchedule, KeywordProgress
     Base.metadata.create_all(bind=engine)
     
     # Run dynamic schema migrations using the inspector
@@ -119,8 +120,12 @@ def init_db():
                 conn.execute(text("ALTER TABLE search_queries ADD COLUMN proxy_url TEXT NULL;"))
             print("Database migration: added proxy_url column to search_queries.")
 
-def get_db():
+from fastapi import Request
+
+def get_db(request: Request = None):
     db = SessionLocal()
+    if request is not None:
+        request.state.db = db
     try:
         yield db
     finally:

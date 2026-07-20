@@ -139,3 +139,10 @@ keyword_scraper.db*
 
 # Tor binaries and downloaded artifacts
 backend/tor/
+
+# Node/Vite dependencies
+node_modules/
+frontend/node_modules/
+frontend/dist/
+.DS_Store
+

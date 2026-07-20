@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from typing import Tuple, Dict, Any
 from dotenv import load_dotenv
 
-from sqlalchemy import create_engine, Column, String, Text, DateTime, text, inspect
+from sqlalchemy import create_engine, Column, String, Text, DateTime, text, inspect, select
 from sqlalchemy.orm import declarative_base, sessionmaker
 from sqlalchemy.exc import OperationalError
 
@@ -244,12 +244,12 @@ def export_search_to_postgres(search_id: int, db_session) -> Tuple[int, int]:
     classifies them, and saves/upserts them to the conformed scraped_articles table.
     Returns: (inserted_count, updated_count)
     """
-    records = db_session.query(CrawledURL).filter(
+    records = db_session.scalars(select(CrawledURL).where(
         CrawledURL.search_id == search_id,
         CrawledURL.status == "matched"
-    ).all()
+    )).all()
 
-    search_query_record = db_session.query(SearchQuery).filter(SearchQuery.id == search_id).first()
+    search_query_record = db_session.scalars(select(SearchQuery).where(SearchQuery.id == search_id)).first()
     query_keyword = search_query_record.keyword if search_query_record else ""
 
     pg_db = SessionPostgres()
@@ -277,7 +277,7 @@ def export_search_to_postgres(search_id: int, db_session) -> Tuple[int, int]:
                 matched_kws = query_keyword
 
             # Check if record already exists in PostgreSQL
-            db_article = pg_db.query(ScrapedArticle).filter(ScrapedArticle.record_id == record_id).first()
+            db_article = pg_db.scalars(select(ScrapedArticle).where(ScrapedArticle.record_id == record_id)).first()
             is_new = False
             if not db_article:
                 db_article = ScrapedArticle(record_id=record_id)

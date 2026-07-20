@@ -18,6 +18,9 @@ playwright
 trafilatura>=1.6.0
 py3langid>=0.2.0
 starlette>=0.36.0
+python-multipart>=0.0.9
+passlib[bcrypt]
+python-jose[cryptography]
 
 # Optional — only needed for XLSX/Parquet export
 # pandas>=2.2.0

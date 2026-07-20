@@ -6,7 +6,7 @@ import csv
 import io as _io_mod
 import json
 from typing import Tuple, Optional
-from sqlalchemy import func
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 from backend.models import CrawledURL, SearchQuery
 
@@ -58,31 +58,31 @@ def get_export_data(
     Queries matched URLs for a search query and returns them as a list of dicts.
     (Pandas-free — compatible with Python 3.14+)
     """
-    query_record = db.query(SearchQuery).filter(SearchQuery.id == search_id).first()
+    query_record = db.scalars(select(SearchQuery).where(SearchQuery.id == search_id)).first()
     if not query_record:
         raise ValueError(f"Search Query ID {search_id} not found.")
 
-    query = db.query(CrawledURL).filter(CrawledURL.search_id == search_id)
+    stmt = select(CrawledURL).where(CrawledURL.search_id == search_id)
 
     if q and q.strip():
         q_clean = q.strip().lower()
-        query = query.filter(
+        stmt = stmt.where(
             (func.lower(CrawledURL.title).contains(q_clean)) |
             (func.lower(CrawledURL.url).contains(q_clean)) |
             (func.lower(CrawledURL.domain).contains(q_clean))
         )
     if status and status.strip():
-        query = query.filter(CrawledURL.status == status.strip())
+        stmt = stmt.where(CrawledURL.status == status.strip())
     if exclude_duplicates:
-        query = query.filter(CrawledURL.is_duplicate == False)
+        stmt = stmt.where(CrawledURL.is_duplicate == False)
 
     sort_col = CrawledURL.occurrences if sort_by == "occurrences" else CrawledURL.relevance_score
-    query = query.order_by(
+    stmt = stmt.order_by(
         sort_col.desc() if sort_desc else sort_col.asc(),
         CrawledURL.discovered_at.desc()
     )
 
-    records = query.all()
+    records = db.scalars(stmt).all()
     data_list = []
     for r in records:
         matched_kws = ""

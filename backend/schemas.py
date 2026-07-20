@@ -6,7 +6,7 @@
 
 from datetime import datetime
 from typing import List, Optional, Dict
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 class SearchQueryCreate(BaseModel):
     keyword: Optional[str] = ""
@@ -49,8 +49,7 @@ class SearchQueryResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class CrawledURLResponse(BaseModel):
     id: int
@@ -79,8 +78,7 @@ class CrawledURLResponse(BaseModel):
     discovered_at: datetime
     matched_keywords: Optional[str] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class PaginatedCrawledURLResponse(BaseModel):
     total: int
@@ -106,8 +104,7 @@ class SearchScheduleResponse(BaseModel):
     next_run: datetime
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 # Firecrawl Output Schema Mappings
 class FirecrawlMetadata(BaseModel):
@@ -163,3 +160,24 @@ class ScrapeRequest(BaseModel):
     proxy_url: Optional[str] = None  # HTTP/SOCKS5 proxy for geo-restricted sites
 
 
+class UserCreate(BaseModel):
+    email: str
+    password: str
+
+
+class UserResponse(BaseModel):
+    id: int
+    email: str
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+
+
+class RefreshTokenRequest(BaseModel):
+    refresh_token: str

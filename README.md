@@ -50,8 +50,8 @@ A premium, modern, glassmorphism-styled web application built with **FastAPI**, 
 ## 🛠️ Tech Stack
 
 - **Backend**: Python 3.9+, FastAPI, SQLAlchemy ORM, Uvicorn, Slowapi, Beautiful Soup 4, Requests, Selenium, Psycopg2.
-- **Database**: SQLite (local workspace queue and config), PostgreSQL (scraped article production synchronization).
-- **Frontend**: Vanilla HTML5, CSS3 (Glassmorphism design system, CSS Grid/Flexbox, Custom variables), Vanilla ES6 JavaScript.
+- **Database**: PostgreSQL (unified database for search queries, schedules, crawler progress, users, and synchronized production archives).
+- **Frontend**: React (Vite, Zustand, Tailwind CSS / Custom CSS modules).
 
 ---
 
@@ -60,15 +60,16 @@ A premium, modern, glassmorphism-styled web application built with **FastAPI**, 
 ```
 ├── backend/
 │   ├── main.py                 # FastAPI server app, lifespans, API routes, and rate limits
-│   ├── database.py             # SQLite/PostgreSQL engine session config and database startup checks
-│   ├── models.py               # SQLAlchemy models (SearchQuery, CrawledURL, etc.)
+│   ├── auth.py                 # JWT Token creation, verification, and user details dependencies
+│   ├── database.py             # PostgreSQL engine connection pool setup & automatic db startup checks
+│   ├── models.py               # SQLAlchemy models (User, SearchQuery, CrawledURL, SearchSchedule, etc.)
 │   ├── schemas.py              # Pydantic serialization definitions
 │   ├── queue_manager.py        # Threaded worker loops, domain-rate limits, and scrape tasks
 │   ├── crawler.py              # Page fetching, BS4 cleaning, language/date detection, and parser
 │   ├── exporter.py             # Spreadsheet stream output generator (Excel/CSV/JSON/Parquet)
 │   ├── scheduler.py            # Recurring cron scheduler loops for active automations
 │   ├── firecrawl_converter.py  # Firecrawl content parser, DOM scoring, and Markdown extraction layer
-│   ├── postgres_integration.py # PostgreSQL scraped_articles sync engine and heuristic classifier
+│   ├── postgres_integration.py # PostgreSQL sync engine and heuristic classifier
 │   ├── tor_router.py           # Tor SOCKS5 routing utilities & DNS leak prevention
 │   ├── tor_setup.py            # Auto-downloader & extractor for Tor Expert Bundle on Windows
 │   ├── simhash_dedup.py        # SimHash content deduplication & near-duplicate filters
@@ -76,19 +77,19 @@ A premium, modern, glassmorphism-styled web application built with **FastAPI**, 
 │   ├── sitemap_discovery.py    # Discovers XML sitemaps & RSS/Atom feeds to find deep links
 │   ├── url_classifier.py       # Filters non-content urls (static, pagination) in O(1)
 │   └── test_site_search.py     # Unit tests verifying site search detection and form routing
-├── static/
-│   ├── index.html              # Single Page Application HTML markup with Glassmorphic dashboard
-│   ├── app.js                  # AJAX request controllers, polling state, and table renderers
-│   ├── styles.css              # Premium Dark-mode Glassmorphic neon-glow styling
-│   ├── test_search.html        # Local mock site search landing page (for crawling diagnostic testing)
-│   ├── search_results.html     # Local mock site search results list page
-│   ├── search_results_page2.html # Local mock site search results pagination page 2
-│   ├── article_matched_1.html  # Mock article 1 containing matching test content
-│   ├── article_matched_2.html  # Mock article 2 containing matching test content
-│   ├── article_matched_3.html  # Mock article 3 containing matching test content
-│   └── should-not-expand.html  # Mock non-article page that should be excluded from deep extraction
-├── requirements.txt            # Python package requirements checklist (includes psycopg2-binary)
-├── run.bat                     # Automated Windows setup & launcher script (auto-starts Tor proxy)
+├── frontend/                   # React Single-Page Application (Vite project)
+│   ├── src/                    # Source files (components, api layers, state stores, views, etc.)
+│   ├── index.html              # HTML entry point for the React app
+│   ├── package.json            # Frontend dependency manifest and run scripts
+│   └── vite.config.js          # Vite config (routes '/api' to backend and outputs builds to static/)
+├── config/                     # Configuration directory
+│   ├── keywords.json           # Stores system keywords & classification groups
+│   └── urls.json               # Stores predefined domains/sitemaps for custom index scans
+├── static/                     # compiled frontend assets served directly by FastAPI server
+│   ├── index.html              # Build entry point index
+│   └── assets/                 # Compiled CSS and JS bundles from the frontend Vite build
+├── requirements.txt            # Python package requirements checklist (includes psycopg2-binary, passlib, jose)
+├── run.bat                     # Automated Windows setup & launcher script (launches pre-built backend+frontend)
 ├── test_crawler.py             # Comprehensive diagnostic suite for database, search, and normalizer logic
 └── selenium_scraper.py         # Standalone CLI dynamic sequential pagination scraper with PostgreSQL classifier
 ```
@@ -102,28 +103,60 @@ Double-click the **`run.bat`** file in the root workspace. This script will auto
 1. Verify if Python is installed.
 2. Initialize a Python virtual environment (`.venv`).
 3. Upgrade `pip` and install all required modules listed in `requirements.txt`.
-4. Open the web interface at `http://127.0.0.1:8000` in your default browser.
-5. Start the backend Uvicorn development server.
+4. Run pre-flight check to configure the Tor daemon (starts Tor proxy automatically).
+5. Open the web interface at `http://127.0.0.1:8000` (which serves the pre-built React application).
+6. Start the backend Uvicorn development server.
 
-### Option B: Manual Setup (All OS)
+### Option B: Manual Setup & Development Workflow (All OS)
 
-1. **Clone or navigate** into the project directory.
-2. **Create a virtual environment**:
-   ```bash
-   python -m venv .venv
-   ```
-3. **Activate the virtual environment**:
-   - **Windows**: `.venv\Scripts\activate`
-   - **macOS/Linux**: `source .venv/bin/activate`
-4. **Install dependencies**:
+#### 1. Backend Setup
+1. **Navigate** into the project root directory.
+2. **Create and activate a virtual environment**:
+   - **Windows**:
+     ```bash
+     python -m venv .venv
+     .venv\Scripts\activate
+     ```
+   - **macOS/Linux**:
+     ```bash
+     python -m venv .venv
+     source .venv/bin/activate
+     ```
+3. **Install python packages**:
    ```bash
    pip install -r requirements.txt
+   ```
+4. **Configure Environment Variables**:
+   Create or edit the `.env` file in the root directory (based on `.env.example`) and configure your PostgreSQL database and a secure JWT secret:
+   ```bash
+   DATABASE_URL=postgresql://username:password@localhost:5432/keyword_scraper
+   JWT_SECRET=your_secure_random_jwt_secret_key
    ```
 5. **Launch the FastAPI Server**:
    ```bash
    python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000 --reload
    ```
-6. **Open the browser**: Go to `http://127.0.0.1:8000/`.
+
+#### 2. Frontend Setup
+1. **Navigate** into the `frontend/` directory:
+   ```bash
+   cd frontend
+   ```
+2. **Install node dependencies**:
+   ```bash
+   npm install
+   ```
+3. **Run in Development Mode**:
+   ```bash
+   npm run dev
+   ```
+   *This starts the Vite dev server at `http://localhost:5173/` which automatically proxies all `/api` requests to the backend FastAPI server.*
+4. **Build for Production**:
+   If you make updates to the frontend code and want to compile them to be served directly by the backend:
+   ```bash
+   npm run build
+   ```
+   *This compiles assets directly into the `/static` folder in the project root.*
 
 ---
 

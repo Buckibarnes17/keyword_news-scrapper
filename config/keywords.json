@@ -1,0 +1,610 @@
+{
+  "version": "1.0",
+  "description": "KeywordScout keyword config — add keywords via the Config Manager page",
+  "keywords": [
+    {
+      "keyword": "China Daily",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "CGTN",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Global Times",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "National Statistics bureau China",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Ministry of external",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "The Irrawaddy- News magazine focused on Myanmar's politics and society.",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Mizzima News - Independent news service covering politics, economy, society.",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Democratic Voice of Burma (DVB) - Broadcast and online news by an independent NGO.",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Burma News International (BNI) - Coalition of independent ethnic and regional news vagencies.",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "BBC Burmese - BBC's Burmese service with news, analysis and features.",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Voice of America (VOA) Burmese - English & Burmese reporting on Myanmar.",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Radio Free Asia (RFA) Burmese - Burmese language reporting and news.",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Additional Myanmar News & Media Sites",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Kachin News",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Myanmar Business Today",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Nepal Institute for Strategic Studies",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Institute for Integrated Development Studies",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Nepal Development Research Institute",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Policy Research Institute",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Institute of Foreign affairs",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "NepJOL",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "The Kathmandu Post",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Regional coverage, tribal affairs & high-level political debate (English & Hindi)",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "General news, local politics (Assamese)",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Nagaland-centric political & developmental news (English, Nagamese)",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Youth-centric issues and citizen journalism across all eight states (English)",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Real-time breaking news, environmental reporting and state-specific updates (English, Assamese)",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Legacy-based reporting on administrative and state infrastructure (English)",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Meghalaya specific news focusing on community and governance (English)",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Reports on Manipuri socio-political and cultural shifts (English & Meiteilon)",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Detailed coverage of the Naga political issue and local governance (English)",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Independent reporting with focus on Manipur hill districts, tribal rights and socio-political development across Northeast (English)",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Balochistan",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Khyber Pakhtunkhwa",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Militant groups in Pakistan",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Balochistan Liberation Army (BLA)",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Balochistan Republican Army (BRA)",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Balochistan National Army (BNA)",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Balochistan Republican Guard (BRG)",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Majeed Brigade",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Baloch Raaji Ajoi Sangar (BRAS)",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Zirab",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Baloch Yakjehti Committee (BYC)",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "BYC: Maharang Baloch",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Gwadar-Bachao-Andolan (Haq Do movement)",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Islamic State of Khorasan Province (ISKP)",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Organization of Islamic Cooperation (OIC)",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Lashkar-e-Balochistan (LeB)",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Tehreek-e-Nifaz-e-Aman Balochistan (TNAB)",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Balochistan Muttahida Mahaz",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Lashkar-e-Khorasan (LeK)",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Sarfaraz Peace Force",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Siraj Raisani United Front",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Shafiq Mengal Group",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Baloch National Movement (BNM)",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Voice of Baloch Missing Persons (VBMP/ VFBMP)",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Free Balochistan Movement (FBM)",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Baloch Human Rights Organization (BHRO)",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Baloch Human Rights Council (BHRC)",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Baloch Students Organization (BSO)",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Voice of Balochistan",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Tehreek-e-Taliban Pakistan (TTP)",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Lashkar-e-Jhangvi (LeJ)",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Jamaat-ul-Ahrar (JuA)",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Hizb-ul-Ahrar (HuA)",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Jaish-ul-Adl (ex Jundullah or Junud Allah)",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Sipah-e-Sahaba Pakistan (SSP)",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Lashkar-e-Jhangvi (LeJ)",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Tariq Geedar Group (TGG)",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Lashkar-e-Islam (LeI)",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Ansar-ul-Islam (AuI)",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Islamic Movement of Uzbekistan (IMU)",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Islamic Jihad Group (IJG)",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Turkestan Islamic Party (TIP)",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "East Turkestan Islamic Movement (ETIM)",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Islamic State of Khorasan Province (ISKP)",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "DAESH",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Punjabi Taliban",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Pashtun Tahafuz Movement (PTM)",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Difa-e-Pakistan Council (DPC)",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Tehreek-e-Labaik Pakistan",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Hizb-ut-Tehrir (HuT)",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Ahle-Sunnat Wal Jamaat (ASWJ)",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Tehreek-Ghalba-e-Islam (TGI)",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "National Counter-Terrorism Authority (NACTA)",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "National Action Plan (NAP), Frontier Crimes Regulation (FCR)",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "National Accountability Bureau (NAB)",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Prothom Alo",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Daily Amar Desh",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "The Daily Star",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Dhaka Tribune",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "BD News 24",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "UN Global Compact",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Military Websites",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Japanese Ministry of Defense",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Australian Strategic Policy Institute",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Stockholm International Peace research Institute etc.",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Bangladesh Institute of International and Strategic Studies (BIISS)",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    },
+    {
+      "keyword": "Manohar Parikkar- International Defense studies and Analysis",
+      "group": "general",
+      "match_type": "phrase",
+      "notes": ""
+    }
+  ],
+  "groups": {
+    "china": "China-related keywords",
+    "myanmar": "Myanmar-related keywords",
+    "northeast_india": "Northeast India keywords",
+    "pakistan_central_asia": "Pakistan and Central Asia keywords",
+    "general": "General monitoring keywords",
+    "new_kw_group": "New Keyword Group Descr",
+    "edited_kw_group": "Edited Keyword Group",
+    "bulk_kw_group": "Bulk Keyword Group"
+  }
+}
