@@ -230,6 +230,8 @@ def scrape_duckduckgo_selenium(query: str) -> List[str]:
         
         service = Service(driver_path)
         driver = webdriver.Chrome(service=service, options=chrome_options)
+        driver.set_page_load_timeout(30)
+        driver.set_script_timeout(30)
         
         # Execute CDP command to remove the navigator.webdriver property completely
         driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {

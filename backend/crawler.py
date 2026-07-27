@@ -259,6 +259,8 @@ class Crawler:
                 
                 service = Service(driver_path)
                 self._driver = webdriver.Chrome(service=service, options=chrome_options)
+                self._driver.set_page_load_timeout(30)
+                self._driver.set_script_timeout(30)
                 
                 # Execute CDP command to remove the navigator.webdriver property completely
                 self._driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
@@ -287,7 +289,7 @@ class Crawler:
                     context = browser.new_context()   # identical to current new_page() behaviour
                 # ─────────────────────────────────────────────────────────────────
                 page = context.new_page()
-                page.goto(url)
+                page.goto(url, timeout=30000)
                 content = page.content()
                 context.close()
                 return content
@@ -476,6 +478,10 @@ class Crawler:
                     pass  # If body never appears, still grab whatever is there
                 html_content = driver.page_source
             except Exception as e:
+                from selenium.common.exceptions import TimeoutException
+                if isinstance(e, TimeoutException):
+                    print(f"Selenium page load timed out for {url}. Recreating driver.")
+                    self.close()
                 # Fallback to HTTP requests on selenium error
                 print(f"Selenium fetch failed, falling back to HTTP: {e}")
                 html_content = self._fetch_http(url)
@@ -510,6 +516,10 @@ class Crawler:
                             pass
                         html_content = driver.page_source
                     except Exception as selenium_error:
+                        from selenium.common.exceptions import TimeoutException
+                        if isinstance(selenium_error, TimeoutException):
+                            print(f"Selenium page load timed out for {url} during 403 fallback. Recreating driver.")
+                            self.close()
                         print(f"Selenium fallback also failed: {selenium_error}")
                         raise http_err
                 else:
@@ -532,6 +542,10 @@ class Crawler:
                             pass
                         html_content = driver.page_source
                     except Exception as selenium_error:
+                        from selenium.common.exceptions import TimeoutException
+                        if isinstance(selenium_error, TimeoutException):
+                            print(f"Selenium page load timed out for {url} during connection fallback. Recreating driver.")
+                            self.close()
                         print(f"Selenium fallback also failed: {selenium_error}")
                         raise e
                 else:

@@ -137,8 +137,15 @@ def initialize_app_state():
     try:
         from backend.postgres_integration import init_postgres_db
         init_postgres_db(verbose=True)
+        # Run automated integration verification
+        from backend.db_verify import verify_integration
+        verification_report = verify_integration()
+        if verification_report["overall_status"] != "PASSED":
+            print(f"[PostgreSQL Error] Database verification failed: {verification_report}")
+        else:
+            print("[PostgreSQL] Database verification passed successfully.")
     except Exception as pg_init_err:
-        print(f"[PostgreSQL Warning] Could not initialize database on startup: {pg_init_err}")
+        print(f"[PostgreSQL Warning] Could not initialize or verify database on startup: {pg_init_err}")
 
 # JWT Auth Logic & Helper Imports
 from backend.auth import (

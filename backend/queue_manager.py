@@ -109,14 +109,31 @@ def fetch_direct_urls(url_list_str: str, session: Session, query = None) -> List
 
     sm_results = []
     if sitemap_urls_to_fetch:
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-        with ThreadPoolExecutor(max_workers=min(5, len(sitemap_urls_to_fetch))) as sm_pool:
-            sm_futures = [sm_pool.submit(_fetch_sitemap, u) for u in sitemap_urls_to_fetch]
-            for fut in as_completed(sm_futures):
-                try:
-                    sm_results.extend(fut.result())
-                except Exception:
-                    pass
+        from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
+        sm_pool = ThreadPoolExecutor(max_workers=min(5, len(sitemap_urls_to_fetch)))
+        sm_futures = [sm_pool.submit(_fetch_sitemap, u) for u in sitemap_urls_to_fetch]
+        pending = list(sm_futures)
+        start_time = time.time()
+        try:
+            while pending:
+                if is_job_stopped(query.id):
+                    for f in pending:
+                        f.cancel()
+                    break
+                if time.time() - start_time > 45.0:
+                    print("[Watchdog Warning] Parallel sitemap fetching in fetch_direct_urls timed out after 45s.")
+                    for f in pending:
+                        f.cancel()
+                    break
+                done, pending = wait(pending, timeout=1.0, return_when=FIRST_COMPLETED)
+                for fut in done:
+                    try:
+                        sm_results.extend(fut.result())
+                    except Exception:
+                        pass
+        finally:
+            wait_on_shutdown = not is_job_stopped(query.id)
+            sm_pool.shutdown(wait=wait_on_shutdown)
 
     final_urls = plain_urls + sm_results
     return list(dict.fromkeys(final_urls))  # Deduplicate
@@ -304,6 +321,131 @@ def crawl_url_task(
             db.close()
     return url_id, result
 
+def run_direct_discovery(unique_raw_urls: List[str], query) -> Tuple[Dict[str, List[str]], Set[str]]:
+    """
+    Runs keyword-independent URL discovery (sitemap, feed, or link expansion)
+    once per unique URL.
+    Returns:
+      - A dict mapping d_url -> List[discovered_urls]
+      - A set of bare domains of the direct URLs
+    """
+    discovered_candidates = {}
+    searched_domains = set()
+
+    def _discover_single(d_url: str) -> Tuple[str, List[str], Optional[str]]:
+        if is_job_stopped(query.id):
+            return d_url, [], None
+
+        if not (d_url.startswith("http://") or d_url.startswith("https://")):
+            return d_url, [], None
+
+        parsed = urlparse(d_url)
+        path = parsed.path.lower()
+
+        # Get bare domain
+        od = parsed.netloc.lower()
+        domain = od[4:] if od.startswith("www.") else od
+
+        # Sitemap check
+        if path.endswith(".xml") or "sitemap" in path:
+            try:
+                from backend.sitemap_discovery import discover_from_sitemap
+                if is_job_stopped(query.id):
+                    return d_url, [], domain
+                urls = discover_from_sitemap(d_url, max_urls=500)
+                print(f"[SitemapDiscovery] Found {len(urls)} URLs for sitemap: {d_url}")
+                return d_url, urls, domain
+            except Exception as e:
+                print(f"[SitemapDiscovery] Failed for {d_url}: {e}")
+                return d_url, [d_url], domain
+
+        # Feed check
+        elif "rss" in path or "feed" in path or "atom" in path or path.endswith("/feed") or path.endswith("/feed/"):
+            try:
+                from backend.sitemap_discovery import discover_from_feeds
+                if is_job_stopped(query.id):
+                    return d_url, [], domain
+                urls = discover_from_feeds(d_url, max_urls=200)
+                print(f"[FeedDiscovery] Found {len(urls)} URLs for feed: {d_url}")
+                return d_url, urls, domain
+            except Exception as e:
+                print(f"[FeedDiscovery] Failed for {d_url}: {e}")
+                return d_url, [d_url], domain
+
+        # Regular URL -> link expansion
+        else:
+            candidates = [d_url]
+            local_crawler = Crawler(proxy_url=getattr(query, 'proxy_url', None))
+            try:
+                if is_job_stopped(query.id):
+                    return d_url, [d_url], domain
+                html_text = local_crawler.fetch_page(d_url, engine="fast", ignore_robots=getattr(query, 'ignore_robots', False))
+                if is_job_stopped(query.id):
+                    return d_url, [d_url], domain
+                soup = BeautifulSoup(html_text, "html.parser")
+                count = 0
+                for a in soup.find_all("a"):
+                    if is_job_stopped(query.id):
+                        break
+                    if count >= 100:
+                        break
+                    href = a.get("href")
+                    if href:
+                        abs_url = urljoin(d_url, href.strip())
+                        parsed_abs = urlparse(abs_url)
+                        if parsed_abs.scheme in ("http", "https"):
+                            abs_domain = parsed_abs.netloc.lower()
+                            if abs_domain.startswith("www."):
+                                abs_domain = abs_domain[4:]
+                            if abs_domain == domain:
+                                abs_path = parsed_abs.path.lower()
+                                if not any(abs_path.endswith(ext) for ext in [".pdf", ".jpg", ".jpeg", ".png", ".gif", ".svg", ".zip", ".css", ".js", ".xml"]):
+                                    candidates.append(abs_url)
+                                    count += 1
+                print(f"[LinkExpansion] Discovered {len(candidates)} URLs for: {d_url}")
+            except Exception as ex:
+                print(f"[WARNING] Failed to expand links for {d_url}: {ex}")
+            finally:
+                local_crawler.close()
+            return d_url, candidates, domain
+
+    # Concurrently run discovery for each direct URL (I/O bound)
+    if unique_raw_urls:
+        from concurrent.futures import TimeoutError as FuturesTimeoutError
+        exp_pool = ThreadPoolExecutor(max_workers=min(16, len(unique_raw_urls)))
+        futures = [exp_pool.submit(_discover_single, u) for u in unique_raw_urls]
+        from concurrent.futures import wait, FIRST_COMPLETED
+        pending = list(futures)
+        start_time = time.time()
+        try:
+            while pending:
+                if is_job_stopped(query.id):
+                    for f in pending:
+                        f.cancel()
+                    break
+
+                # Implement 45s watchdog on the entire discovery phase
+                if time.time() - start_time > 45.0:
+                    print("[Watchdog Warning] Direct URL discovery timed out after 45s. Cancelling pending discovery tasks.")
+                    for f in pending:
+                        f.cancel()
+                    break
+
+                done, pending = wait(pending, timeout=1.0, return_when=FIRST_COMPLETED)
+                for fut in done:
+                    try:
+                        d_url, candidates, domain = fut.result()
+                        discovered_candidates[d_url] = list(dict.fromkeys(candidates))
+                        if domain:
+                            searched_domains.add(domain)
+                    except Exception as ex:
+                        print(f"[WARNING] Direct URL discovery future failed: {ex}")
+        finally:
+            wait_on_shutdown = not is_job_stopped(query.id)
+            exp_pool.shutdown(wait=wait_on_shutdown)
+
+    return discovered_candidates, searched_domains
+
 def _process_single_keyword(
     search_id: int,
     kw: str,
@@ -313,6 +455,8 @@ def _process_single_keyword(
     seen_simhashes: list,
     seen_lock: threading.Lock,
     total_keyword_count: int,
+    pre_discovered_candidates: Dict[str, List[str]] = None,
+    pre_discovered_domains: Set[str] = None,
 ) -> None:
     """
     Processes a single keyword within a search job: discovers candidate URLs,
@@ -350,89 +494,130 @@ def _process_single_keyword(
             except Exception as e:
                 print(f"Error parsing domains_filter: {e}")
 
-        # ── Step 1: Gather candidate URLs (same logic as before, now per-keyword isolated) ──
+        # ── Step 1: Gather candidate URLs ──
         candidate_urls = []
         if query.source_type == "direct":
-            raw_direct_urls = fetch_direct_urls(query.direct_urls, db, query=query)
-            candidate_urls = []
             searched_domains = set()
-
-            # Parallel link expansion and site-search detection across all direct URLs
-            def _expand_single_direct_url(d_url):
-                local_candidates = [d_url]
-                local_domain = None
-                local_crawler = Crawler(proxy_url=query.proxy_url)
-                try:
-                    _detector = SiteSearchDetector(local_crawler)
-                    _discovered = None
-                    if kw.strip() and kw != "__config__":
-                        _discovered = _detector.discover(
-                            url=d_url, keyword=kw,
-                            engine=query.engine, ignore_robots=query.ignore_robots
-                        )
-                    if _discovered is not None:
-                        print(f"[SiteSearch] {len(_discovered)} URLs via site-native search: {d_url}")
-                        local_candidates.extend(_discovered)
+            if pre_discovered_candidates is not None:
+                raw_direct_urls = list(pre_discovered_candidates.keys())
+                searched_domains = set(pre_discovered_domains or [])
+                
+                # Check site-native search detection for each raw direct URL if keyword is active
+                site_search_urls = []
+                site_search_domains_to_skip_expansion = set()
+                
+                if kw.strip() and kw != "__config__":
+                    def _check_site_search(d_url):
+                        local_crawler = Crawler(proxy_url=query.proxy_url)
                         try:
-                            p = urlparse(d_url)
-                            od = p.netloc.lower()
-                            local_domain = od[4:] if od.startswith("www.") else od
-                        except Exception:
-                            pass
-                        return local_candidates, local_domain
-                    # Link-expansion fallback
+                            _detector = SiteSearchDetector(local_crawler)
+                            _discovered = _detector.discover(
+                                url=d_url, keyword=kw,
+                                engine=query.engine, ignore_robots=query.ignore_robots
+                            )
+                            if _discovered:
+                                print(f"[SiteSearch] {len(_discovered)} URLs via site-native search: {d_url}")
+                                return d_url, _discovered
+                        except Exception as ex:
+                            print(f"[WARNING] Site-native search check failed for {d_url}: {ex}")
+                        finally:
+                            local_crawler.close()
+                        return d_url, None
+
+                    # Concurrently check site search
+                    ss_pool = ThreadPoolExecutor(max_workers=min(8, len(raw_direct_urls) or 1))
+                    ss_futures = [ss_pool.submit(_check_site_search, u) for u in raw_direct_urls]
+                    from concurrent.futures import wait, FIRST_COMPLETED
+                    pending = list(ss_futures)
                     try:
-                        html_text = local_crawler.fetch_page(d_url, engine="fast", ignore_robots=query.ignore_robots)
-                        soup = BeautifulSoup(html_text, "html.parser")
-                        p = urlparse(d_url)
-                        od = p.netloc.lower()
-                        local_domain = od[4:] if od.startswith("www.") else od
-                        count = 0
-                        for a in soup.find_all("a"):
-                            if count >= 100:
+                        while pending:
+                            if is_job_stopped(search_id):
+                                for f in pending:
+                                    f.cancel()
                                 break
-                            href = a.get("href")
-                            if href:
-                                abs_url = urljoin(d_url, href.strip())
-                                parsed_abs = urlparse(abs_url)
-                                if parsed_abs.scheme in ("http", "https"):
-                                    abs_domain = parsed_abs.netloc.lower()
-                                    if abs_domain.startswith("www."):
-                                        abs_domain = abs_domain[4:]
-                                    if abs_domain == local_domain:
-                                        path = parsed_abs.path.lower()
-                                        if not any(path.endswith(ext) for ext in [".pdf", ".jpg", ".jpeg", ".png", ".gif", ".svg", ".zip", ".css", ".js", ".xml"]):
-                                            local_candidates.append(abs_url)
-                                            count += 1
-                    except Exception as ex:
-                        print(f"[WARNING] Failed to expand links for {d_url}: {ex}")
+                            done, pending = wait(pending, timeout=1.0, return_when=FIRST_COMPLETED)
+                            for fut in done:
+                                try:
+                                    d_url, discovered_urls = fut.result()
+                                    if discovered_urls:
+                                        site_search_urls.extend(discovered_urls)
+                                        site_search_domains_to_skip_expansion.add(d_url)
+                                except Exception as ex:
+                                    print(f"[WARNING] Site search future failed: {ex}")
+                    finally:
+                        wait_on_shutdown = not is_job_stopped(search_id)
+                        ss_pool.shutdown(wait=wait_on_shutdown)
+
+                # Build candidate_urls list:
+                for d_url in raw_direct_urls:
+                    if d_url in site_search_domains_to_skip_expansion:
+                        pass
+                    else:
+                        candidate_urls.extend(pre_discovered_candidates.get(d_url, [d_url]))
+
+                # Add the site_search_urls
+                candidate_urls.extend(site_search_urls)
+                
+            else:
+                # Fallback implementation
+                raw_direct_urls = [line.strip() for line in (query.direct_urls or "").split("\n") if line.strip()]
+                unique_raw_urls = list(dict.fromkeys(raw_direct_urls))
+                
+                temp_candidates, searched_domains = run_direct_discovery(unique_raw_urls, query)
+                
+                site_search_urls = []
+                site_search_domains_to_skip_expansion = set()
+                if kw.strip() and kw != "__config__":
+                    def _check_site_search_fallback(d_url):
+                        local_crawler = Crawler(proxy_url=query.proxy_url)
                         try:
-                            p = urlparse(d_url)
-                            od = p.netloc.lower()
-                            local_domain = od[4:] if od.startswith("www.") else od
+                            _detector = SiteSearchDetector(local_crawler)
+                            _discovered = _detector.discover(
+                                url=d_url, keyword=kw,
+                                engine=query.engine, ignore_robots=query.ignore_robots
+                            )
+                            if _discovered:
+                                return d_url, _discovered
                         except Exception:
                             pass
-                finally:
-                    local_crawler.close()
-                return local_candidates, local_domain
+                        finally:
+                            local_crawler.close()
+                        return d_url, None
 
-            # Run link-expansion for all direct URLs in parallel (I/O-bound, safe with threads)
-            with ThreadPoolExecutor(max_workers=min(8, len(raw_direct_urls) or 1)) as exp_pool:
-                exp_futures = {exp_pool.submit(_expand_single_direct_url, u): u for u in raw_direct_urls}
-                for fut in as_completed(exp_futures):
+                    ss_pool = ThreadPoolExecutor(max_workers=min(8, len(unique_raw_urls) or 1))
+                    ss_futures = [ss_pool.submit(_check_site_search_fallback, u) for u in unique_raw_urls]
+                    from concurrent.futures import wait, FIRST_COMPLETED
+                    pending = list(ss_futures)
                     try:
-                        local_cands, local_dom = fut.result()
-                        candidate_urls.extend(local_cands)
-                        if local_dom:
-                            searched_domains.add(local_dom)
-                    except Exception as ex:
-                        print(f"[WARNING] Link expansion future failed: {ex}")
+                        while pending:
+                            if is_job_stopped(search_id):
+                                for f in pending:
+                                    f.cancel()
+                                break
+                            done, pending = wait(pending, timeout=1.0, return_when=FIRST_COMPLETED)
+                            for fut in done:
+                                try:
+                                    d_url, discovered_urls = fut.result()
+                                    if discovered_urls:
+                                        site_search_urls.extend(discovered_urls)
+                                        site_search_domains_to_skip_expansion.add(d_url)
+                                except Exception:
+                                    pass
+                    finally:
+                        wait_on_shutdown = not is_job_stopped(search_id)
+                        ss_pool.shutdown(wait=wait_on_shutdown)
+
+                for d_url in unique_raw_urls:
+                    if d_url in site_search_domains_to_skip_expansion:
+                        pass
+                    else:
+                        candidate_urls.extend(temp_candidates.get(d_url, [d_url]))
+                candidate_urls.extend(site_search_urls)
 
             # Parallel site-restricted search for all discovered domains
             if kw.strip() and kw != "__config__" and searched_domains:
                 def _site_restricted_search(domain):
                     try:
-                        # Resolve tor_proxies: inject when job's proxy_url is the Tor SOCKS5 address
                         _tor_proxies = None
                         try:
                             from backend.tor_router import TOR_REQUESTS_PROXIES, is_tor_proxy_url
@@ -441,31 +626,49 @@ def _process_single_keyword(
                         except ImportError:
                             pass
                         results = search_web(f"{kw} site:{domain}", max_results=50, tor_proxies=_tor_proxies)
-                        print(f"[INFO] Site-restricted search '{domain}' → {len(results)} URLs")
+                        print(f"[INFO] Site-restricted search '{domain}' -> {len(results)} URLs")
                         return results
                     except Exception as sex:
                         print(f"[WARNING] Site-restricted search failed for '{domain}': {sex}")
                         return []
 
-                with ThreadPoolExecutor(max_workers=min(5, len(searched_domains))) as sr_pool:
-                    sr_futures = [sr_pool.submit(_site_restricted_search, d) for d in searched_domains]
-                    for fut in as_completed(sr_futures):
-                        try:
-                            candidate_urls.extend(fut.result())
-                        except Exception:
-                            pass
+                sr_pool = ThreadPoolExecutor(max_workers=min(10, len(searched_domains)))
+                sr_futures = [sr_pool.submit(_site_restricted_search, d) for d in searched_domains]
+                from concurrent.futures import wait, FIRST_COMPLETED
+                pending = list(sr_futures)
+                try:
+                    while pending:
+                        if is_job_stopped(search_id):
+                            for f in pending:
+                                f.cancel()
+                            break
+                        done, pending = wait(pending, timeout=1.0, return_when=FIRST_COMPLETED)
+                        for fut in done:
+                            try:
+                                candidate_urls.extend(fut.result())
+                            except Exception:
+                                pass
+                finally:
+                    wait_on_shutdown = not is_job_stopped(search_id)
+                    sr_pool.shutdown(wait=wait_on_shutdown)
 
             candidate_urls = list(dict.fromkeys(candidate_urls))
             candidate_urls = filter_candidate_urls(candidate_urls)
 
         elif query.source_type == "sitemap":
-            from backend.sitemap_discovery import discover_from_sitemap
             base_url = (query.direct_urls or "").strip().splitlines()[0].strip()
-            candidate_urls = list(dict.fromkeys(discover_from_sitemap(base_url, max_urls=500)))
+            if pre_discovered_candidates is not None and base_url in pre_discovered_candidates:
+                candidate_urls = pre_discovered_candidates[base_url]
+            else:
+                from backend.sitemap_discovery import discover_from_sitemap
+                candidate_urls = list(dict.fromkeys(discover_from_sitemap(base_url, max_urls=500)))
         elif query.source_type == "feed":
-            from backend.sitemap_discovery import discover_from_feeds
             base_url = (query.direct_urls or "").strip().splitlines()[0].strip()
-            candidate_urls = list(dict.fromkeys(discover_from_feeds(base_url, max_urls=200)))
+            if pre_discovered_candidates is not None and base_url in pre_discovered_candidates:
+                candidate_urls = pre_discovered_candidates[base_url]
+            else:
+                from backend.sitemap_discovery import discover_from_feeds
+                candidate_urls = list(dict.fromkeys(discover_from_feeds(base_url, max_urls=200)))
         else:
             if kw == "__config__":
                 candidate_urls = []
@@ -524,7 +727,7 @@ def _process_single_keyword(
             if url in existing_records:
                 existing = existing_records[url]
                 if existing.status in ("pending", "failed"):
-                    db_urls.append(existing)
+                     db_urls.append(existing)
             else:
                 parsed = urlparse(url)
                 domain_val = parsed.netloc.lower()
@@ -563,8 +766,8 @@ def _process_single_keyword(
         else:
             base_max = int(_os_w.environ.get("KS_SELENIUM_WORKERS", "4"))
 
-        # Adaptive formula to prevent thread explosion (total threads capped ~100)
-        url_workers = max(4, min(25, 100 // max(1, total_keyword_count)))
+        # Adaptive formula to prevent thread explosion (total threads capped ~150)
+        url_workers = max(8, min(30, 150 // max(1, total_keyword_count)))
         max_workers = min(base_max, url_workers)
 
         # Pre-warm Selenium driver before the pool starts (avoids 25-thread lock contention
@@ -578,10 +781,9 @@ def _process_single_keyword(
                 print(f"[Selenium Warmup] Pre-warm failed (non-fatal): {_warmup_err}")
 
         futures = {}
-        crawled_count_local = 0
-        matched_count_local = 0
-
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        executor = ThreadPoolExecutor(max_workers=max_workers)
+        has_abandoned = False
+        try:
             for db_url in db_urls:
                 future = executor.submit(
                     crawl_url_task,
@@ -604,61 +806,119 @@ def _process_single_keyword(
                     shared_domain_lock=_shared_domain_lock,
                     shared_process_stop_event=_shared_process_stop_event
                 )
-                futures[future] = db_url.id
+                futures[future] = {"url_id": db_url.id, "start_time": time.time()}
 
-            for future_idx, future in enumerate(as_completed(futures), 1):
+            from concurrent.futures import wait, FIRST_COMPLETED
+
+            pending = list(futures.keys())
+            while pending:
                 if _queue_stop_event.is_set() or is_job_stopped(search_id):
+                    # Cancel outstanding tasks on abort/stop
+                    for fut in pending:
+                        fut.cancel()
                     db.commit()
                     break
-                url_id, result = future.result()
 
-                # Dedup check with shared cross-keyword lock
-                if result.get("content_hash") and result["status"] in ("matched", "skipped"):
-                    h = result["content_hash"]
-                    is_dup = False
-                    with seen_lock:
-                        if h in seen_content_hashes:
-                            is_dup = True
-                        else:
-                            if result.get("simhash"):
-                                from backend.simhash_dedup import is_near_duplicate
-                                for existing_sh in seen_simhashes:
-                                    if is_near_duplicate(result["simhash"], existing_sh):
-                                        is_dup = True
-                                        break
-                            if not is_dup:
-                                seen_content_hashes.add(h)
+                done, pending = wait(pending, timeout=1.0, return_when=FIRST_COMPLETED)
+
+                for future in done:
+                    info = futures[future]
+                    url_id = info["url_id"]
+                    try:
+                        url_id, result = future.result()
+                    except Exception as fut_err:
+                        print(f"[ERROR] Crawl task future failed: {fut_err}")
+                        result = {"status": "failed", "error_message": f"Task error: {str(fut_err)}"}
+
+                    # Dedup check with shared cross-keyword lock
+                    if result.get("content_hash") and result["status"] in ("matched", "skipped"):
+                        h = result["content_hash"]
+                        is_dup = False
+                        with seen_lock:
+                            if h in seen_content_hashes:
+                                is_dup = True
+                            else:
                                 if result.get("simhash"):
-                                    seen_simhashes.append(result["simhash"])
-                    if is_dup:
-                        result["status"] = "skipped"
-                        result["is_duplicate"] = True
-                        result["error_message"] = "Duplicate page content detected."
+                                    from backend.simhash_dedup import is_near_duplicate
+                                    for existing_sh in seen_simhashes:
+                                        if is_near_duplicate(result["simhash"], existing_sh):
+                                            is_dup = True
+                                            break
+                                if not is_dup:
+                                    seen_content_hashes.add(h)
+                                    if result.get("simhash"):
+                                        seen_simhashes.append(result["simhash"])
+                        if is_dup:
+                            result["status"] = "skipped"
+                            result["is_duplicate"] = True
+                            result["error_message"] = "Duplicate page content detected."
 
-                db_item = db.scalars(select(CrawledURL).where(CrawledURL.id == url_id)).first()
-                if db_item:
-                    for key, val in result.items():
-                        if hasattr(db_item, key):
-                            setattr(db_item, key, val)
-                    db.flush()
+                    db_item = db.scalars(select(CrawledURL).where(CrawledURL.id == url_id)).first()
+                    if db_item:
+                        for key, val in result.items():
+                            if hasattr(db_item, key):
+                                setattr(db_item, key, val)
+                        db.flush()
 
-                    with seen_lock:
                         if db_item.status != "pending":
-                            crawled_count_local += 1
+                            inc_crawled = 1
+                        else:
+                            inc_crawled = 0
+                        
                         if db_item.status == "matched":
-                            matched_count_local += 1
+                            inc_matched = 1
+                        else:
+                            inc_matched = 0
 
-        # Write to DB once after the executor exits
-        if crawled_count_local > 0 or matched_count_local > 0:
-            db.execute(
-                update(SearchQuery)
-                .where(SearchQuery.id == search_id)
-                .values(
-                    total_urls_crawled=SearchQuery.total_urls_crawled + crawled_count_local,
-                    total_urls_matched=SearchQuery.total_urls_matched + matched_count_local
-                )
-            )
-            db.commit()
+                        # Write progress incrementally to DB per-page
+                        if inc_crawled > 0 or inc_matched > 0:
+                            db.execute(
+                                update(SearchQuery)
+                                .where(SearchQuery.id == search_id)
+                                .values(
+                                    total_urls_crawled=SearchQuery.total_urls_crawled + inc_crawled,
+                                    total_urls_matched=SearchQuery.total_urls_matched + inc_matched
+                                )
+                            )
+                            if inc_matched > 0:
+                                db.execute(
+                                    update(KeywordProgress)
+                                    .where(KeywordProgress.search_query_id == search_id)
+                                    .where(KeywordProgress.keyword == kw)
+                                    .values(articles_found=KeywordProgress.articles_found + inc_matched)
+                                )
+                            db.commit()
+
+                # Watchdog check for tasks running > 45s
+                now = time.time()
+                still_pending = []
+                for future in pending:
+                    info = futures[future]
+                    elapsed = now - info["start_time"]
+                    if elapsed > 45.0:
+                        has_abandoned = True
+                        url_id = info["url_id"]
+                        future.cancel()  # Try to cancel
+                        print(f"[Watchdog] Crawl task for URL ID {url_id} timed out (>45s) and was abandoned.")
+
+                        db_item = db.scalars(select(CrawledURL).where(CrawledURL.id == url_id)).first()
+                        if db_item and db_item.status == "pending":
+                            db_item.status = "failed"
+                            db_item.error_message = "Task exceeded maximum duration of 45 seconds."
+                            db.flush()
+
+                            db.execute(
+                                update(SearchQuery)
+                                .where(SearchQuery.id == search_id)
+                                .values(total_urls_crawled=SearchQuery.total_urls_crawled + 1)
+                            )
+                            db.commit()
+                    else:
+                        still_pending.append(future)
+                pending = still_pending
+        finally:
+            wait_on_shutdown = not (is_job_stopped(search_id) or _queue_stop_event.is_set() or has_abandoned)
+            executor.shutdown(wait=wait_on_shutdown)
 
         # Mark keyword progress
         if is_job_stopped(search_id):
@@ -762,16 +1022,51 @@ def process_search_query(search_id: int):
             except Exception as e:
                 print(f"Error parsing languages_filter: {e}")
 
+        # Pre-discover keyword-independent candidate URLs if source_type == "direct" or sitemap/feed
+        pre_discovered_candidates = None
+        pre_discovered_domains = None
+
+        if query.source_type == "direct":
+            raw_direct_urls = [line.strip() for line in (query.direct_urls or "").split("\n") if line.strip()]
+            unique_raw_urls = list(dict.fromkeys(raw_direct_urls))
+            print(f"[Direct Discovery] Running keyword-independent discovery for {len(unique_raw_urls)} unique URLs...")
+            pre_discovered_candidates, pre_discovered_domains = run_direct_discovery(unique_raw_urls, query)
+        elif query.source_type == "sitemap":
+            from backend.sitemap_discovery import discover_from_sitemap
+            base_url = (query.direct_urls or "").strip().splitlines()[0].strip()
+            print(f"[Sitemap Discovery] Pre-discovering URLs from sitemap: {base_url} ...")
+            sitemap_urls = list(dict.fromkeys(discover_from_sitemap(base_url, max_urls=500)))
+            pre_discovered_candidates = {base_url: sitemap_urls}
+            # Extract domain of sitemap
+            parsed_base = urlparse(base_url)
+            domain_val = parsed_base.netloc.lower()
+            if domain_val.startswith("www."):
+                domain_val = domain_val[4:]
+            pre_discovered_domains = {domain_val}
+        elif query.source_type == "feed":
+            from backend.sitemap_discovery import discover_from_feeds
+            base_url = (query.direct_urls or "").strip().splitlines()[0].strip()
+            print(f"[Feed Discovery] Pre-discovering URLs from feed: {base_url} ...")
+            feed_urls = list(dict.fromkeys(discover_from_feeds(base_url, max_urls=200)))
+            pre_discovered_candidates = {base_url: feed_urls}
+            # Extract domain of feed
+            parsed_base = urlparse(base_url)
+            domain_val = parsed_base.netloc.lower()
+            if domain_val.startswith("www."):
+                domain_val = domain_val[4:]
+            pre_discovered_domains = {domain_val}
+
         # Parallel keyword processing
         # Keywords are independent; run them concurrently to eliminate N×serial cost.
         # Shared dedup state is protected by seen_lock.
         seen_lock = threading.Lock()
         import os
         _kw_max_workers = min(len(keywords_list), int(
-            os.environ.get("KS_MAX_KEYWORD_WORKERS", "4")
+            os.environ.get("KS_MAX_KEYWORD_WORKERS", "8")
         ))
 
-        with ThreadPoolExecutor(max_workers=_kw_max_workers, thread_name_prefix="KWWorker") as kw_pool:
+        kw_pool = ThreadPoolExecutor(max_workers=_kw_max_workers, thread_name_prefix="KWWorker")
+        try:
             kw_futures = {
                 kw_pool.submit(
                     _process_single_keyword,
@@ -783,16 +1078,25 @@ def process_search_query(search_id: int):
                     seen_simhashes=seen_simhashes,
                     seen_lock=seen_lock,
                     total_keyword_count=len(keywords_list),
+                    pre_discovered_candidates=pre_discovered_candidates,
+                    pre_discovered_domains=pre_discovered_domains,
                 ): kw
                 for kw in keywords_list
                 if not (_queue_stop_event.is_set() or is_job_stopped(search_id))
             }
             for fut in as_completed(kw_futures):
+                if _queue_stop_event.is_set() or is_job_stopped(search_id):
+                    for f in kw_futures:
+                        f.cancel()
+                    break
                 kw_label = kw_futures[fut]
                 try:
                     fut.result()
                 except Exception as kw_err:
                     print(f"[ERROR] Keyword worker '{kw_label}' raised: {kw_err}")
+        finally:
+            wait_on_shutdown = not (is_job_stopped(search_id) or _queue_stop_event.is_set())
+            kw_pool.shutdown(wait=wait_on_shutdown)
 
         # Clean up remaining pending URLs
         pending_urls = db.scalars(select(CrawledURL).where(
