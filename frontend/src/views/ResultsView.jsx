@@ -221,7 +221,7 @@ export default function ResultsView() {
           <div className="progress-title-details">
             {isRunning && <span className="pulse-indicator" id="progress-pulse"></span>}
             <h3 id="progress-keyword-text" title={activeSearchKeyword}>
-              {status === 'pending' ? 'Initializing crawl: ' : 'Analyzing: '} 
+              {searchMeta?.status_message || (status === 'pending' ? 'Initializing crawl: ' : 'Analyzing: ')} 
               <strong style={{ cursor: activeSearchKeyword && activeSearchKeyword.includes(',') ? 'help' : 'default' }}>
                 {getKeywordDisplayText()}
               </strong>

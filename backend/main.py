@@ -1110,6 +1110,7 @@ def get_search_results(
             "source_type": query_record.source_type,
             "ignore_robots": query_record.ignore_robots,
             "status": query_record.status,
+            "status_message": query_record.status_message,
             "total_urls_found": query_record.total_urls_found,
             "total_urls_crawled": query_record.total_urls_crawled,
             "total_urls_matched": query_record.total_urls_matched,

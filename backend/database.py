@@ -36,7 +36,10 @@ if not DATABASE_URL:
         print(f"[Database] Connected to PostgreSQL: {POSTGRES_HOST}:{POSTGRES_PORT}")
     else:
         print(f"[Database Fallback] PostgreSQL database at {POSTGRES_HOST}:{POSTGRES_PORT} is unreachable. Falling back to local SQLite.")
-        DATABASE_URL = "sqlite:///keywordscout.db"
+        if os.environ.get("VERCEL") == "1" or "VERCEL" in os.environ:
+            DATABASE_URL = "sqlite:////tmp/keywordscout.db"
+        else:
+            DATABASE_URL = "sqlite:///keywordscout.db"
 else:
     # If DATABASE_URL is provided, verify it is reachable if it's a PostgreSQL string
     if DATABASE_URL.startswith("postgresql://") or DATABASE_URL.startswith("postgres://"):
@@ -46,7 +49,10 @@ else:
             port = parsed.port or 5432
             if not is_postgres_reachable(host, port, timeout=2.0):
                 print(f"[Database Fallback] Configured PostgreSQL database at {host}:{port} is unreachable. Falling back to local SQLite.")
-                DATABASE_URL = "sqlite:///keywordscout.db"
+                if os.environ.get("VERCEL") == "1" or "VERCEL" in os.environ:
+                    DATABASE_URL = "sqlite:////tmp/keywordscout.db"
+                else:
+                    DATABASE_URL = "sqlite:///keywordscout.db"
         except Exception as e:
             print(f"[Database Warning] Error checking configured database liveness: {e}")
 
@@ -54,8 +60,16 @@ else:
 if DATABASE_URL.startswith("sqlite"):
     engine = create_engine(
         DATABASE_URL,
-        connect_args={"check_same_thread": False}
+        connect_args={"check_same_thread": False, "timeout": 30}
     )
+    
+    from sqlalchemy import event
+    @event.listens_for(engine, "connect")
+    def set_sqlite_pragma(dbapi_connection, connection_record):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL;")
+        cursor.execute("PRAGMA synchronous=NORMAL;")
+        cursor.close()
 else:
     engine = create_engine(
         DATABASE_URL,
@@ -78,51 +92,47 @@ def init_db():
     If not, connects to the administrative 'postgres' database and creates it.
     Then executes SQLAlchemy metadata generation and column migrations.
     """
-    if DATABASE_URL.startswith("sqlite"):
+    if not DATABASE_URL.startswith("sqlite"):
         try:
-            from backend.models import User, SearchQuery, CrawledURL, SearchSchedule, KeywordProgress
-            Base.metadata.create_all(bind=engine)
-            print("[SQLite] Successfully initialized database tables.")
+            parsed = urllib.parse.urlparse(DATABASE_URL)
+            db_name = parsed.path.lstrip('/')
+            
+            if db_name:
+                # Connect to admin database to verify target database existence
+                postgres_default_url = urllib.parse.urlunparse(
+                    parsed._replace(path='/postgres')
+                )
+                admin_engine = create_engine(postgres_default_url, isolation_level="AUTOCOMMIT")
+                try:
+                    with admin_engine.connect() as admin_conn:
+                        res = admin_conn.execute(text(f"SELECT 1 FROM pg_database WHERE datname='{db_name}'")).fetchone()
+                        if not res:
+                            admin_conn.execute(text(f"CREATE DATABASE {db_name}"))
+                            print(f"[PostgreSQL] Successfully created database '{db_name}'.")
+                except Exception as admin_err:
+                    print(f"[PostgreSQL Warning] Fallback database check failed: {admin_err}")
+                finally:
+                    admin_engine.dispose()
         except Exception as e:
-            print(f"[SQLite Error] Failed to initialize database: {e}")
-        return
+            print(f"[PostgreSQL Warning] Database precheck error: {e}")
 
-    try:
-        parsed = urllib.parse.urlparse(DATABASE_URL)
-        db_name = parsed.path.lstrip('/')
-        
-        if db_name:
-            # Connect to admin database to verify target database existence
-            postgres_default_url = urllib.parse.urlunparse(
-                parsed._replace(path='/postgres')
-            )
-            admin_engine = create_engine(postgres_default_url, isolation_level="AUTOCOMMIT")
-            try:
-                with admin_engine.connect() as admin_conn:
-                    res = admin_conn.execute(text(f"SELECT 1 FROM pg_database WHERE datname='{db_name}'")).fetchone()
-                    if not res:
-                        admin_conn.execute(text(f"CREATE DATABASE {db_name}"))
-                        print(f"[PostgreSQL] Successfully created database '{db_name}'.")
-            except Exception as admin_err:
-                print(f"[PostgreSQL Warning] Fallback database check failed: {admin_err}")
-            finally:
-                admin_engine.dispose()
-    except Exception as e:
-        print(f"[PostgreSQL Warning] Database precheck error: {e}")
-
-    # Ensure the target schema exists
-    try:
-        with engine.connect() as conn:
-            conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {POSTGRES_SCHEMA};"))
-            conn.commit()
-            print(f"[PostgreSQL] Ensured schema '{POSTGRES_SCHEMA}' exists.")
-    except Exception as schema_err:
-        print(f"[PostgreSQL Warning] Error ensuring schema '{POSTGRES_SCHEMA}' exists: {schema_err}")
+        # Ensure the target schema exists
+        try:
+            with engine.connect() as conn:
+                conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {POSTGRES_SCHEMA};"))
+                conn.commit()
+                print(f"[PostgreSQL] Ensured schema '{POSTGRES_SCHEMA}' exists.")
+        except Exception as schema_err:
+            print(f"[PostgreSQL Warning] Error ensuring schema '{POSTGRES_SCHEMA}' exists: {schema_err}")
 
     # Create tables and run dynamic schema migrations
     try:
         from backend.models import User, SearchQuery, CrawledURL, SearchSchedule, KeywordProgress
         Base.metadata.create_all(bind=engine)
+        if DATABASE_URL.startswith("sqlite"):
+            print("[SQLite] Successfully initialized/verified database tables.")
+        else:
+            print("[PostgreSQL] Successfully initialized/verified database tables.")
         
         # Run dynamic schema migrations using the inspector
         from sqlalchemy import inspect
@@ -181,8 +191,19 @@ def init_db():
                 with engine.begin() as conn:
                     conn.execute(text("ALTER TABLE search_queries ADD COLUMN proxy_url TEXT NULL;"))
                 print("Database migration: added proxy_url column to search_queries.")
+            if 'status_message' not in columns:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE search_queries ADD COLUMN status_message TEXT NULL;"))
+                print("Database migration: added status_message column to search_queries.")
+
+        if 'search_schedules' in inspector.get_table_names():
+            columns = [col['name'] for col in inspector.get_columns('search_schedules')]
+            if 'engine' not in columns:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE search_schedules ADD COLUMN engine VARCHAR(50) DEFAULT 'fast';"))
+                print("Database migration: added engine column to search_schedules.")
     except Exception as db_init_err:
-        print(f"[PostgreSQL Error] Failed to initialize table schema and migrations: {db_init_err}")
+        print(f"[Database Error] Failed to initialize table schema and migrations: {db_init_err}")
 
 from fastapi import Request
 

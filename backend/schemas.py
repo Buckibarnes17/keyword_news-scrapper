@@ -46,6 +46,7 @@ class SearchQueryResponse(BaseModel):
     total_urls_crawled: int
     total_urls_matched: int
     error_message: Optional[str] = None
+    status_message: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 

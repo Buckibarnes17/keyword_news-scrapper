@@ -1,0 +1,12 @@
+{
+  "domains": [
+    "chinadaily.com.cn",
+    "cgtn.com",
+    "globaltimes.cn",
+    "fmprc.gov.cn",
+    "stats.gov.cn"
+  ],
+  "tlds": [
+    ".cn"
+  ]
+}

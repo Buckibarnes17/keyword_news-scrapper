@@ -211,7 +211,11 @@ python inspect_search_urls.py --list
 ## 🔒 Rate Limiting & Configurations
 
 - **Rate Limiting**: To prevent API abuse, endpoints are rate-limited via `slowapi`. The `/api/results/{search_id}` endpoint is set to a maximum of **300 requests/minute** to accommodate real-time front-end polling.
-- **Database Configuration**: The application leverages SQLite for storing search configurations, schedules, and local crawled URLs.
+- **Database Configuration**: The application leverages SQLite for storing search configurations, schedules, and local crawled URLs. To maximize concurrency and prevent "database is locked" errors under parallel writes, SQLite runs with **Write-Ahead Logging (WAL)** mode, a `NORMAL` synchronous level, and a 30-second busy timeout.
 - **PostgreSQL Configuration**: The production synchronizer connects to PostgreSQL using the connection string configured via the `DATABASE_URL` or `POSTGRES_URL` environment variable. By default, it falls back to:
   `postgresql://postgres:postgres@localhost:5432/keyword_scraper`
   On backend server startup, the system will automatically check if the target database exists on the database server and auto-create it if missing.
+- **ExpressVPN Phase Routing**:
+  - For Chinese sources (e.g., `chinadaily.com.cn`), the crawler runs a dedicated Phase 1 routing exit node check through ExpressVPN (connected to Singapore).
+  - **Self-Healing Daemon**: If the system's connection attempt fails because the ExpressVPN background daemon is not running, the application automatically triggers `expressvpnctl background enable` and retries.
+  - **Bypassing VPN**: To skip ExpressVPN connection entirely and crawl all Chinese and normal sources over your normal connection, set `KS_DISABLE_VPN=true` in your `.env` file.

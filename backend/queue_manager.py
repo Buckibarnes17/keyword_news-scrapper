@@ -34,7 +34,7 @@ from backend.search_engine import search_web
 from backend.crawler import Crawler
 from bs4 import BeautifulSoup
 from backend.site_search_detector import SiteSearchDetector
-from backend.url_classifier import filter_candidate_urls
+from backend.url_classifier import filter_candidate_urls, is_chinese_url
 
 # Thread-safe shared state variables
 _shared_aborted_jobs = {}
@@ -138,6 +138,110 @@ def fetch_direct_urls(url_list_str: str, session: Session, query = None) -> List
     final_urls = plain_urls + sm_results
     return list(dict.fromkeys(final_urls))  # Deduplicate
 
+
+def is_news_article_url(url: str) -> bool:
+    """
+    Heuristic to determine if a URL represents a news article page (not a homepage or category index).
+    """
+    from urllib.parse import urlparse
+    import re
+    
+    parsed = urlparse(url)
+    path = parsed.path.lower()
+    path_clean = path.strip('/')
+    
+    # Homepage check
+    if not path_clean:
+        return False
+        
+    # Short index files
+    if path_clean in ("index.html", "index.shtml", "index.htm", "default.html", "default.shtml"):
+        return False
+        
+    # Category paths
+    parts = path_clean.split('/')
+    
+    # If the path has no directory/file structure or is extremely short, check if it has digits
+    has_digits = any(c.isdigit() for c in parts[-1]) if parts else False
+    
+    # Check date patterns in path: /2026/07/27/, /2026-07-27/, /202607/ etc.
+    has_date_in_path = bool(re.search(r'/\d{4}[-/]?\d{2}[-/]?\d{2}/|/\d{4}\d{2}/|/page/\d{6}/|/a/\d{6}/', path))
+    
+    # Common article extensions
+    ends_with_html = any(path_clean.endswith(ext) for ext in (".html", ".shtml", ".htm"))
+    
+    # If it clearly has a publication date pattern in the path
+    if has_date_in_path:
+        return True
+        
+    # FMPRC statements format (e.g. t20260727_11234567.shtml)
+    if bool(re.search(r't\d{8}_', path)):
+        return True
+
+    # If it is a category index page (e.g. /world, /world/, /opinion)
+    if len(parts) <= 2 and not has_digits and not has_date_in_path:
+        return False
+        
+    # Deep file paths ending in typical page extensions with digits in the filename
+    if len(parts) >= 2 and (has_digits or ends_with_html):
+        return True
+        
+    return False
+
+
+def extract_date_from_url(url: str) -> Optional[datetime]:
+    """
+    Extracts a publication date from the URL path as a fallback.
+    """
+    from urllib.parse import urlparse
+    import re
+    
+    parsed = urlparse(url)
+    path = parsed.path.lower()
+    
+    # 1. Match YYYY/MM/DD or YYYY-MM-DD
+    m = re.search(r'/(\d{4})[-/](\d{2})[-/](\d{2})/', path)
+    if m:
+        try:
+            return datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)), tzinfo=timezone.utc)
+        except ValueError:
+            pass
+            
+    # 2. Match YYYY/MM or YYYY-MM
+    m = re.search(r'/(\d{4})[-/](\d{2})/', path)
+    if m:
+        try:
+            return datetime(int(m.group(1)), int(m.group(2)), 1, tzinfo=timezone.utc)
+        except ValueError:
+            pass
+
+    # 3. Match /YYYYMM/
+    m = re.search(r'/(\d{4})(\d{2})/', path)
+    if m:
+        try:
+            return datetime(int(m.group(1)), int(m.group(2)), 1, tzinfo=timezone.utc)
+        except ValueError:
+            pass
+
+    # 4. Match /a/YYYYMM/
+    m = re.search(r'/a/(\d{4})(\d{2})/', path)
+    if m:
+        try:
+            return datetime(int(m.group(1)), int(m.group(2)), 1, tzinfo=timezone.utc)
+        except ValueError:
+            pass
+            
+    # 5. Match tYYYYMMDD_
+    m = re.search(r't(\d{4})(\d{2})(\d{2})_', path)
+    if m:
+        try:
+            return datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)), tzinfo=timezone.utc)
+        except ValueError:
+            pass
+
+    return None
+
+
 def crawl_url_task(
     url_id: int,
     search_id: int,
@@ -188,9 +292,23 @@ def crawl_url_task(
         url = crawled_url.url
         domain = crawled_url.domain
 
+        # Retrieve source_type from search query details
+        query_record = db.scalars(select(SearchQuery).where(SearchQuery.id == search_id)).first()
+        source_type = query_record.source_type if query_record else "direct"
+
         # Close DB session early and safely now that we have read the attributes
         db.close()
         db = None
+
+        # Apply article-only check if no-keyword config run is active
+        is_keyword_free = not keyword or not keyword.strip() or keyword == "__config__"
+        is_no_keyword_config = (source_type == "direct" and is_keyword_free)
+        if is_no_keyword_config:
+            if not is_news_article_url(url):
+                return url_id, {
+                    "status": "skipped",
+                    "error_message": "Skipped: Homepage or category/index landing page content."
+                }
 
         # Resolve effective rate limit (env override → passed arg → hardcoded default)
         import os as _os
@@ -290,7 +408,24 @@ def crawl_url_task(
                         
                 # Apply date range filters
                 pub_date = analysis.get("discovered_at")
-                if pub_date and isinstance(pub_date, datetime):
+                if not pub_date or not isinstance(pub_date, datetime):
+                    pub_date = extract_date_from_url(url)
+
+                if is_no_keyword_config:
+                    if not pub_date:
+                        result["status"] = "skipped"
+                        result["error_message"] = "Skipped: Unable to verify article publication date."
+                    else:
+                        if pub_date.tzinfo is None:
+                            pub_date = pub_date.replace(tzinfo=timezone.utc)
+                        three_months_ago = datetime.now(timezone.utc) - timedelta(days=90)
+                        if pub_date < three_months_ago:
+                            result["status"] = "skipped"
+                            result["error_message"] = f"Skipped: Article published more than 3 months ago ({pub_date.strftime('%Y-%m-%d')})."
+                        else:
+                            result["status"] = "matched"
+
+                if result["status"] == "matched" and pub_date and isinstance(pub_date, datetime):
                     # If pub_date is timezone-naive, make it timezone-aware to match date_range_start/end
                     if pub_date.tzinfo is None:
                         pub_date = pub_date.replace(tzinfo=timezone.utc)
@@ -457,7 +592,12 @@ def _process_single_keyword(
     total_keyword_count: int,
     pre_discovered_candidates: Dict[str, List[str]] = None,
     pre_discovered_domains: Set[str] = None,
-) -> None:
+    discover_only: bool = False,
+    crawl_only: bool = False,
+    chinese_only: Optional[bool] = None,
+    discovered_urls: Optional[List[str]] = None,
+    mark_completed: bool = True,
+) -> List[str]:
     """
     Processes a single keyword within a search job: discovers candidate URLs,
     crawls them, deduplicates results, and writes to DB.
@@ -496,7 +636,9 @@ def _process_single_keyword(
 
         # ── Step 1: Gather candidate URLs ──
         candidate_urls = []
-        if query.source_type == "direct":
+        if crawl_only and discovered_urls is not None:
+            candidate_urls = list(dict.fromkeys(discovered_urls))
+        elif query.source_type == "direct":
             searched_domains = set()
             if pre_discovered_candidates is not None:
                 raw_direct_urls = list(pre_discovered_candidates.keys())
@@ -706,58 +848,84 @@ def _process_single_keyword(
             candidate_urls = candidate_urls[:_max_candidates]
 
         if not candidate_urls:
-            if kp_record:
-                kp_record.status = "completed"
-                kp_record.articles_found = 0
-                kp_record.completed_at = datetime.now(timezone.utc)
-                db.commit()
-            return
+            if not crawl_only and mark_completed:
+                if kp_record:
+                    kp_record.status = "completed"
+                    kp_record.articles_found = 0
+                    kp_record.completed_at = datetime.now(timezone.utc)
+                    db.commit()
+            return []
 
         # ── Step 2: Initialize DB records — bulk approach ───────────────────────────
-        # Single query to find already-existing URLs for this search_id
-        existing_records = {
-            r.url: r for r in db.scalars(select(CrawledURL).where(
-                CrawledURL.search_id == search_id
-            )).all()
-        }
-
-        new_records = []
         db_urls = []
-        for url in candidate_urls:
-            if url in existing_records:
-                existing = existing_records[url]
-                if existing.status in ("pending", "failed"):
-                     db_urls.append(existing)
-            else:
-                parsed = urlparse(url)
-                domain_val = parsed.netloc.lower()
-                if domain_val.startswith("www."):
-                    domain_val = domain_val[4:]
-                new_rec = CrawledURL(
-                    search_id=search_id,
-                    url=url,
-                    domain=domain_val,
-                    status="pending"
-                )
-                new_records.append(new_rec)
-                db_urls.append(new_rec)
+        if crawl_only:
+            if candidate_urls:
+                # Retrieve from database
+                db_urls = db.scalars(select(CrawledURL).where(
+                    CrawledURL.search_id == search_id,
+                    CrawledURL.url.in_(candidate_urls)
+                )).all()
+        else:
+            # Single query to find already-existing URLs for this search_id
+            existing_records = {
+                r.url: r for r in db.scalars(select(CrawledURL).where(
+                    CrawledURL.search_id == search_id
+                )).all()
+            }
 
-        if new_records:
-            db.add_all(new_records)
+            new_records = []
+            for url in candidate_urls:
+                if url in existing_records:
+                    existing = existing_records[url]
+                    if existing.status in ("pending", "failed"):
+                          db_urls.append(existing)
+                else:
+                    parsed = urlparse(url)
+                    domain_val = parsed.netloc.lower()
+                    if domain_val.startswith("www."):
+                        domain_val = domain_val[4:]
+                    new_rec = CrawledURL(
+                        search_id=search_id,
+                        url=url,
+                        domain=domain_val,
+                        status="pending"
+                    )
+                    new_records.append(new_rec)
+                    db_urls.append(new_rec)
+
+            if new_records:
+                db.add_all(new_records)
+                db.commit()
+                # Reload to get DB-assigned IDs
+                for r in new_records:
+                    db.refresh(r)
+
+            unique_urls_count = db.execute(select(func.count(CrawledURL.id)).where(CrawledURL.search_id == search_id)).scalar() or 0
+            db.execute(
+                update(SearchQuery)
+                .where(SearchQuery.id == search_id)
+                .values(total_urls_found=unique_urls_count)
+            )
             db.commit()
-            # Reload to get DB-assigned IDs
-            for r in new_records:
-                db.refresh(r)
 
-        unique_urls_count = db.execute(select(func.count(CrawledURL.id)).where(CrawledURL.search_id == search_id)).scalar() or 0
-        db.execute(
-            update(SearchQuery)
-            .where(SearchQuery.id == search_id)
-            .values(total_urls_found=unique_urls_count)
-        )
-        db.commit()
+        if discover_only:
+            return candidate_urls
 
         # ── Step 3: Crawl pool ──────────────────────────────────────────────────────
+        # Filter URLs to crawl based on Chinese classification phase
+        db_urls_to_crawl = []
+        for db_url in db_urls:
+            is_chinese = is_chinese_url(db_url.url)
+            if chinese_only is not None:
+                if chinese_only and not is_chinese:
+                    continue
+                if not chinese_only and is_chinese:
+                    continue
+            db_urls_to_crawl.append(db_url)
+
+        if not db_urls_to_crawl:
+            return candidate_urls
+
         import os as _os_w
         if query.engine == "fast":
             base_max = int(_os_w.environ.get("KS_FAST_WORKERS", "25"))
@@ -784,7 +952,7 @@ def _process_single_keyword(
         executor = ThreadPoolExecutor(max_workers=max_workers)
         has_abandoned = False
         try:
-            for db_url in db_urls:
+            for db_url in db_urls_to_crawl:
                 future = executor.submit(
                     crawl_url_task,
                     url_id=db_url.id,
@@ -921,22 +1089,23 @@ def _process_single_keyword(
             executor.shutdown(wait=wait_on_shutdown)
 
         # Mark keyword progress
-        if is_job_stopped(search_id):
-            if kp_record:
-                kp_record.status = "failed"
-                kp_record.completed_at = datetime.now(timezone.utc)
-                db.commit()
-        else:
-            kw_matched = db.execute(select(func.count(CrawledURL.id)).where(
-                CrawledURL.search_id == search_id,
-                CrawledURL.id.in_([u.id for u in db_urls]),
-                CrawledURL.status == "matched"
-            )).scalar() or 0
-            if kp_record:
-                kp_record.status = "completed"
-                kp_record.articles_found = kw_matched
-                kp_record.completed_at = datetime.now(timezone.utc)
-                db.commit()
+        if mark_completed or is_job_stopped(search_id):
+            if is_job_stopped(search_id):
+                if kp_record:
+                    kp_record.status = "failed"
+                    kp_record.completed_at = datetime.now(timezone.utc)
+                    db.commit()
+            else:
+                kw_matched = db.execute(select(func.count(CrawledURL.id)).where(
+                    CrawledURL.search_id == search_id,
+                    CrawledURL.id.in_([u.id for u in db_urls]),
+                    CrawledURL.status == "matched"
+                )).scalar() or 0
+                if kp_record:
+                    kp_record.status = "completed"
+                    kp_record.articles_found = kw_matched
+                    kp_record.completed_at = datetime.now(timezone.utc)
+                    db.commit()
 
     except Exception as e:
         print(f"[ERROR] _process_single_keyword failed for '{kw}': {e}")
@@ -949,6 +1118,8 @@ def _process_single_keyword(
                 pass
     finally:
         db.close()
+
+    return candidate_urls
 
 def process_search_query(search_id: int):
     """
@@ -1065,7 +1236,10 @@ def process_search_query(search_id: int):
             os.environ.get("KS_MAX_KEYWORD_WORKERS", "8")
         ))
 
-        kw_pool = ThreadPoolExecutor(max_workers=_kw_max_workers, thread_name_prefix="KWWorker")
+        # 1. DISCOVERY PHASE
+        # Concurrently discover all candidate URLs across all keywords.
+        keyword_candidates = {}
+        kw_pool = ThreadPoolExecutor(max_workers=_kw_max_workers, thread_name_prefix="KWDiscover")
         try:
             kw_futures = {
                 kw_pool.submit(
@@ -1080,6 +1254,7 @@ def process_search_query(search_id: int):
                     total_keyword_count=len(keywords_list),
                     pre_discovered_candidates=pre_discovered_candidates,
                     pre_discovered_domains=pre_discovered_domains,
+                    discover_only=True,
                 ): kw
                 for kw in keywords_list
                 if not (_queue_stop_event.is_set() or is_job_stopped(search_id))
@@ -1091,12 +1266,165 @@ def process_search_query(search_id: int):
                     break
                 kw_label = kw_futures[fut]
                 try:
-                    fut.result()
+                    candidates = fut.result()
+                    keyword_candidates[kw_label] = candidates
                 except Exception as kw_err:
-                    print(f"[ERROR] Keyword worker '{kw_label}' raised: {kw_err}")
+                    print(f"[ERROR] Discovery worker '{kw_label}' raised: {kw_err}")
+                    keyword_candidates[kw_label] = []
         finally:
             wait_on_shutdown = not (is_job_stopped(search_id) or _queue_stop_event.is_set())
             kw_pool.shutdown(wait=wait_on_shutdown)
+
+        # Classify candidate URLs to see if we have Chinese or normal URLs
+        has_chinese = False
+        has_normal = False
+        
+        for kw_label, cand_list in keyword_candidates.items():
+            for url in cand_list:
+                if is_chinese_url(url):
+                    has_chinese = True
+                else:
+                    has_normal = True
+
+        # Check if VPN is disabled via environment configuration
+        import os as _os_env
+        disable_vpn = _os_env.environ.get("KS_DISABLE_VPN", "false").lower() == "true"
+
+        # Phase flags
+        run_vpn_phase = has_chinese and not disable_vpn and not (_queue_stop_event.is_set() or is_job_stopped(search_id))
+        run_normal_phase = (has_normal or (has_chinese and disable_vpn)) and not (_queue_stop_event.is_set() or is_job_stopped(search_id))
+
+        import backend.expressvpn_router as evpn
+
+        # Phase 1: VPN Phase
+        if run_vpn_phase:
+            query.status_message = "Connecting to Singapore VPN..."
+            db.commit()
+            
+            try:
+                with evpn.VPNLockContext() as lock:
+                    evpn.connect_singapore()
+                    evpn.verify_singapore_ip()
+                    
+                    query.status_message = "Crawling Chinese sources via Singapore"
+                    db.commit()
+
+                    # Run crawls for Chinese URLs in parallel
+                    kw_pool = ThreadPoolExecutor(max_workers=_kw_max_workers, thread_name_prefix="KWVPN")
+                    try:
+                        mark_comp = not run_normal_phase
+                        kw_futures = {
+                            kw_pool.submit(
+                                _process_single_keyword,
+                                search_id=search_id,
+                                kw=kw,
+                                query=query,
+                                languages_filter=languages_filter,
+                                seen_content_hashes=seen_content_hashes,
+                                seen_simhashes=seen_simhashes,
+                                seen_lock=seen_lock,
+                                total_keyword_count=len(keywords_list),
+                                pre_discovered_candidates=pre_discovered_candidates,
+                                pre_discovered_domains=pre_discovered_domains,
+                                crawl_only=True,
+                                chinese_only=True,
+                                discovered_urls=keyword_candidates.get(kw),
+                                mark_completed=mark_comp,
+                            ): kw
+                            for kw in keywords_list
+                            if not (_queue_stop_event.is_set() or is_job_stopped(search_id))
+                        }
+                        for fut in as_completed(kw_futures):
+                            if _queue_stop_event.is_set() or is_job_stopped(search_id):
+                                for f in kw_futures:
+                                    f.cancel()
+                                break
+                            kw_label = kw_futures[fut]
+                            try:
+                                fut.result()
+                            except Exception as kw_err:
+                                print(f"[ERROR] VPN crawl worker '{kw_label}' raised: {kw_err}")
+                    finally:
+                        wait_on_shutdown = not (is_job_stopped(search_id) or _queue_stop_event.is_set())
+                        kw_pool.shutdown(wait=wait_on_shutdown)
+                    
+                    query.status_message = "Disconnecting VPN..."
+                    db.commit()
+                    
+                    evpn.disconnect()
+                    evpn.verify_normal_ip()
+                    
+            except Exception as vpn_err:
+                print(f"[ERROR] VPN phase failed: {vpn_err}")
+                # Gather all pending Chinese URLs and mark them as failed with reason
+                try:
+                    db_fresh = SessionLocal()
+                    chinese_urls = db_fresh.scalars(select(CrawledURL).where(
+                        CrawledURL.search_id == search_id,
+                        CrawledURL.status == "pending"
+                    )).all()
+                    
+                    failed_count = 0
+                    for c_url in chinese_urls:
+                        if is_chinese_url(c_url.url):
+                            c_url.status = "failed"
+                            c_url.error_message = f"VPN routing failure: {vpn_err}"
+                            failed_count += 1
+                            
+                    if failed_count > 0:
+                        db_fresh.execute(
+                            update(SearchQuery)
+                            .where(SearchQuery.id == search_id)
+                            .values(
+                                total_urls_crawled=SearchQuery.total_urls_crawled + failed_count
+                            )
+                        )
+                        db_fresh.commit()
+                    db_fresh.close()
+                except Exception as db_err:
+                    print(f"[ERROR] Failed to mark Chinese URLs as failed: {db_err}")
+
+        # Phase 2: Normal Phase
+        if run_normal_phase:
+            query.status_message = "Crawling remaining sources"
+            db.commit()
+
+            kw_pool = ThreadPoolExecutor(max_workers=_kw_max_workers, thread_name_prefix="KWNormal")
+            try:
+                kw_futures = {
+                    kw_pool.submit(
+                        _process_single_keyword,
+                        search_id=search_id,
+                        kw=kw,
+                        query=query,
+                        languages_filter=languages_filter,
+                        seen_content_hashes=seen_content_hashes,
+                        seen_simhashes=seen_simhashes,
+                        seen_lock=seen_lock,
+                        total_keyword_count=len(keywords_list),
+                        pre_discovered_candidates=pre_discovered_candidates,
+                        pre_discovered_domains=pre_discovered_domains,
+                        crawl_only=True,
+                        chinese_only=None if disable_vpn else False,
+                        discovered_urls=keyword_candidates.get(kw),
+                        mark_completed=True,
+                    ): kw
+                    for kw in keywords_list
+                    if not (_queue_stop_event.is_set() or is_job_stopped(search_id))
+                }
+                for fut in as_completed(kw_futures):
+                    if _queue_stop_event.is_set() or is_job_stopped(search_id):
+                        for f in kw_futures:
+                            f.cancel()
+                        break
+                    kw_label = kw_futures[fut]
+                    try:
+                        fut.result()
+                    except Exception as kw_err:
+                        print(f"[ERROR] Normal crawl worker '{kw_label}' raised: {kw_err}")
+            finally:
+                wait_on_shutdown = not (is_job_stopped(search_id) or _queue_stop_event.is_set())
+                kw_pool.shutdown(wait=wait_on_shutdown)
 
         # Clean up remaining pending URLs
         pending_urls = db.scalars(select(CrawledURL).where(
@@ -1124,10 +1452,12 @@ def process_search_query(search_id: int):
         # Complete run if not stopped/aborted
         if is_job_stopped(search_id):
             query.status = "aborted"
+            query.status_message = None
             query.updated_at = datetime.now(timezone.utc)
             db.commit()
         elif not _queue_stop_event.is_set():
             query.status = "completed"
+            query.status_message = None
             query.updated_at = datetime.now(timezone.utc)
             db.commit()
             
@@ -1159,6 +1489,7 @@ def process_search_query(search_id: int):
             pass
             
         query.status = "failed"
+        query.status_message = None
         query.error_message = f"Queue Worker Error: {str(e)}"
         query.updated_at = datetime.now(timezone.utc)
         db.commit()

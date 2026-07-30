@@ -10,7 +10,8 @@ All classification is done on the URL string alone. O(1) per URL.
 
 Dependencies: re, urllib.parse (stdlib only). No new dependencies.
 """
-
+import os
+import json
 import re
 import urllib.parse
 from typing import List
@@ -125,3 +126,102 @@ def filter_candidate_urls(urls: List[str]) -> List[str]:
             print(f"[URLClassifier]   x {u}")
 
     return filtered
+
+
+# ── Chinese Sources / Region Classifier ───────────────────────────────────────────
+
+_CHINESE_SOURCES_CONFIG_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "config",
+    "chinese_sources.json"
+)
+
+_URLS_CONFIG_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "config",
+    "urls.json"
+)
+
+_chinese_domains = set()
+_chinese_tlds = set()
+_chinese_sources_loaded = False
+
+def load_chinese_sources(force: bool = False):
+    """Loads/reloads Chinese source domains and TLDs from config files."""
+    global _chinese_domains, _chinese_tlds, _chinese_sources_loaded
+    if _chinese_sources_loaded and not force:
+        return
+
+    # 1. Load defaults or from config/chinese_sources.json
+    if os.path.exists(_CHINESE_SOURCES_CONFIG_PATH):
+        try:
+            with open(_CHINESE_SOURCES_CONFIG_PATH, "r", encoding="utf-8") as f:
+                config = json.load(f)
+                _chinese_domains = {d.lower().strip() for d in config.get("domains", []) if d.strip()}
+                _chinese_tlds = {t.lower().strip() for t in config.get("tlds", []) if t.strip()}
+        except Exception as e:
+            print(f"[url_classifier] Error loading chinese_sources.json: {e}")
+    
+    if not _chinese_domains:
+        _chinese_domains = {
+            "chinadaily.com.cn",
+            "cgtn.com",
+            "globaltimes.cn",
+            "fmprc.gov.cn",
+            "stats.gov.cn"
+        }
+    if not _chinese_tlds:
+        _chinese_tlds = {".cn"}
+
+    # 2. Dynamically scan config/urls.json for any entry with group == "china"
+    if os.path.exists(_URLS_CONFIG_PATH):
+        try:
+            with open(_URLS_CONFIG_PATH, "r", encoding="utf-8") as f:
+                urls_data = json.load(f)
+                for entry in urls_data.get("urls", []):
+                    if entry.get("group") == "china" and entry.get("url"):
+                        u_parsed = urllib.parse.urlparse(entry["url"])
+                        u_netloc = u_parsed.netloc.lower()
+                        if u_netloc.startswith("www."):
+                            u_netloc = u_netloc[4:]
+                        if u_netloc:
+                            _chinese_domains.add(u_netloc)
+        except Exception as e:
+            print(f"[url_classifier] Error loading urls.json for Chinese domains: {e}")
+
+    _chinese_sources_loaded = True
+
+
+def is_chinese_url(url: str) -> bool:
+    """
+    Returns True if the URL is classified as Chinese based on:
+    1. Suffix/match against domains in the config-driven list.
+    2. Ends with a target TLD (e.g. '.cn').
+    """
+    if not url or not url.startswith("http"):
+        return False
+    
+    load_chinese_sources()
+    
+    try:
+        parsed = urllib.parse.urlparse(url)
+        netloc = parsed.netloc.lower()
+        if netloc.startswith("www."):
+            netloc = netloc[4:]
+        
+        # Direct check or subdomain check
+        if netloc in _chinese_domains:
+            return True
+            
+        for cd in _chinese_domains:
+            if netloc.endswith("." + cd):
+                return True
+                
+        # TLD check
+        for tld in _chinese_tlds:
+            if netloc.endswith(tld) or f"{tld}." in netloc or f"{tld}/" in url:
+                if netloc == tld.lstrip('.') or netloc.endswith(tld):
+                    return True
+    except Exception:
+        pass
+    return False
