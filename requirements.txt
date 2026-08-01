@@ -21,6 +21,19 @@ starlette>=0.36.0
 python-multipart>=0.0.9
 passlib[bcrypt]
 python-jose[cryptography]
+lxml>=5.0.0
+
+# ── Adaptive discovery layer (backend/discovery/) ────────────────────────────
+# crawl4ai powers the preferred sitemap/deep-crawl paths (AsyncUrlSeeder with
+# BM25 relevance scoring, BestFirstCrawlingStrategy). It is OPTIONAL: every
+# strategy in backend/discovery/ ships a pure requests+lxml fallback and the
+# package is imported behind a CRAWL4AI_AVAILABLE guard, so the app runs without
+# it — just with weaker discovery. Installing it also needs a browser:
+#     pip install crawl4ai && playwright install chromium
+# NOTE: as of this commit the crawl4ai code paths have never been executed. All
+# 74 tests in backend/discovery/ exercise the fallbacks. Expect to debug the
+# crawl4ai paths on first real run. See backend/discovery/README.md.
+crawl4ai>=0.9.2
 
 # Optional — only needed for XLSX/Parquet export
 # pandas>=2.2.0
