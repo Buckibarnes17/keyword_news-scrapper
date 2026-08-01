@@ -12,6 +12,19 @@ is (1) install and verify crawl4ai, (2) prove yield on a few sites, (3) wire it
 into `queue_manager`, in that order. Do not skip to (3) — the yield measurement is
 what tells you whether the layer works before you touch the running pipeline.
 
+**Read "Failure modes that LOOK like success" below before you write any wiring
+code.** There are four ways to finish this task such that everything compiles,
+all 74 tests pass, the app runs — and yield stays at 3% or the run silently
+targets an empty database. The most likely one is a two-line type mismatch at the
+`run_direct_discovery` boundary that discards every piece of metadata the new
+layer exists to produce.
+
+Prerequisites the repo cannot supply — get these from the operator first:
+- a real `DATABASE_URL` (+ `JWT_SECRET`) in `.env`; there is no `.env`, only
+  `.env.example`, and an unset `DATABASE_URL` falls back **silently** to SQLite
+- `KS_DISABLE_VPN=true` unless ExpressVPN is genuinely installed and authed on the
+  host, or all 5 China sources will be marked failed
+
 ---
 
 ## Why this work exists — the measured baseline
@@ -144,6 +157,82 @@ one-level link expansion for every URL. Replace its body with a profile lookup:
 Preserve: the stop-flag checks (`is_job_stopped`), the watchdog, and per-domain
 rate limiting. Consider raising the 45s watchdog once discovery stops feeding it
 junk — but measure first.
+
+---
+
+## ⚠️ Failure modes that LOOK like success
+
+Read this before step 4. Each of these compiles, passes all 74 tests, runs without
+error, and produces no improvement — or silently produces nothing at all. They are
+the most likely ways this handoff goes wrong.
+
+### 1. Discarding DiscoveredURL metadata at the boundary  ← MOST LIKELY
+
+`run_direct_discovery()` currently returns `Tuple[Dict[str, List[str]], Set[str]]`
+— **plain URL strings**. Downstream, `candidate_urls` is a flat `List[str]` and
+`CrawledURL(url=..., domain=..., status="pending")` is constructed from strings
+only (`queue_manager.py` ~line 887).
+
+So the minimal-diff integration is to keep the signature and map:
+
+```python
+return {seed: [u.url for u in result.urls]}, domains     # ← DO NOT DO THIS
+```
+
+That **throws away `published_at`, `title` and `relevance_score`**, which is the
+entire point of the redesign. The crawler then still fetches every URL before it
+can judge date or relevance, so the 788-row (26%) watchdog-timeout loss is *not*
+recovered and yield stays at ~3%. Everything passes. Nothing improves.
+
+**Do instead:** widen the boundary so metadata survives to the point where URLs are
+filtered and `CrawledURL` rows are created. Either change
+`run_direct_discovery()` to return `Dict[str, List[DiscoveredURL]]` and update its
+two callers (~line 708 and ~line 1204) plus the three `candidate_urls.extend(...)`
+sites (~698, ~756), or carry a side-table `Dict[url, DiscoveredURL]` through to
+row creation. Then drop stale/irrelevant URLs **before** they reach
+`crawl_url_task`.
+
+**Acceptance test:** after wiring, a job over `niice.org.np` + `cgtn.com` must show
+a *lower* `total_urls_crawled` but a *higher* `total_urls_matched` than the
+baseline. If crawled count stays high, metadata is being discarded — you have hit
+this trap.
+
+### 2. Silently running against an empty SQLite DB
+
+There is no `.env` in the repo, only `.env.example`. With `DATABASE_URL` unset,
+`backend/database.py` falls back through `POSTGRES_*` vars and ultimately to
+`sqlite:////tmp/keywordscout.db`. **It does not raise.** You can run the whole
+stack, see zero results, and never learn you were not talking to PostgreSQL.
+
+**Before running anything:** create `.env` with a real `DATABASE_URL` and
+`JWT_SECRET`, then assert the connection actually points where you expect. The
+production schema is `news_media`; the baseline table is
+`news_media.crawled_urls`. Credentials are deliberately not in this repo — get
+them from the operator.
+
+### 3. VPN phase kills all China sources on a fresh Linux host
+
+`import backend.expressvpn_router as evpn` (~line 1297) runs unconditionally for
+every job, and the `expressvpnctl` lookup paths in that module are Windows-only.
+On a fresh Linux server ExpressVPN is absent, `connect_singapore()` fails, and the
+handler marks **every pending Chinese URL as failed** — 5 sources gone, with only
+a log line to show it. This is exactly the signature of the 346 "VPN routing
+failure" rows in the baseline.
+
+**Set `KS_DISABLE_VPN=true` in `.env` before the first run.** Per the VPN finding
+above, 4 of the 5 Chinese sources need no proxy at all — they answer directly in
+0.3–1.3s. Only `stats.gov.cn` genuinely struggles, and its profile already carries
+the transport flags (force IPv4/HTTPS, 60s, 5 retries) that address it.
+
+### 4. Claiming crawl4ai works because tests pass
+
+Tests pass today *because* `CRAWL4AI_AVAILABLE == False` and the fallbacks are
+exercised. After `pip install crawl4ai` that flips to `True` and code that has
+never executed starts running. Passing tests before install prove nothing about
+crawl4ai. Re-run the suite after install and treat any failure as the expected
+first real signal, not a regression.
+
+---
 
 ### 5. Optional follow-ups
 
