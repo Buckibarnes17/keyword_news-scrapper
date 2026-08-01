@@ -1,0 +1,2424 @@
+{
+  "version": 1,
+  "generated_at": "2026-08-01T15:19:07.982892+00:00",
+  "description": "Per-site crawl profiles derived from live probing of 25 sources on 2026-08-01. Each site declares its own discovery strategy. Values were empirically verified; do not edit by hand without re-probing.",
+  "global_defaults": {
+    "respect_robots": true,
+    "domain_rate_limit_s": 1.0,
+    "timeout_s": 25,
+    "max_retries": 2
+  },
+  "profiles": {
+    "bbc.com": {
+      "domain": "bbc.com",
+      "group": "myanmar",
+      "seed_url": "https://www.bbc.com/burmese",
+      "enabled": true,
+      "strategy": "news_sitemap",
+      "strategy_rationale": "Two complementary Burmese-scoped surfaces, both verified. (1) The Google News sitemap index https://www.bbc.com/sitemaps/https-index-com-news.xml -> 4 shards with real <news:news> markup; filter loc for '/burmese/' — I counted 14 Burmese articles across the 4 shards (7+2+5+0), covering roughly the last 48h across all BBC languages. (2) The RSS feed https://www.bbc.com/burmese/index.xml gives 25 recent Burmese items with pubDate, freshest 2026-08-01. Use the feed as the primary poller and the news sitemap as a second pass. CRITICAL SCOPING: the news sitemap is site-wide (1000+ URLs per shard, all languages) — you MUST filter to the /burmese/ prefix or this will explode into all of bbc.com.",
+      "confidence": "high",
+      "robots": {
+        "respect": true,
+        "override_reason": null,
+        "crawl_delay": null
+      },
+      "transport": {
+        "needs_full_browser_headers": false,
+        "needs_proxy": false,
+        "force_ipv4": false,
+        "force_https": false,
+        "timeout_s": 25,
+        "max_retries": 2
+      },
+      "allowed_hosts": null,
+      "sitemaps": [
+        {
+          "url": "https://www.bbc.com/sitemaps/https-index-com-news.xml",
+          "type": "index",
+          "url_count": 4,
+          "has_lastmod": true,
+          "most_recent": "2026-08-01T13:29:21Z",
+          "sample_urls": [
+            "https://www.bbc.com/sitemaps/https-sitemap-com-news-1.xml",
+            "https://www.bbc.com/sitemaps/https-sitemap-com-news-2.xml",
+            "https://www.bbc.com/sitemaps/https-sitemap-com-news-3.xml",
+            "https://www.bbc.com/sitemaps/https-sitemap-com-news-4.xml"
+          ]
+        },
+        {
+          "url": "https://www.bbc.com/sitemaps/https-sitemap-com-news-1.xml",
+          "type": "news",
+          "url_count": 1000,
+          "has_lastmod": true,
+          "most_recent": "2026-08-01T13:28:31Z",
+          "sample_urls": [
+            "https://www.bbc.com/burmese/articles/crmrv0v9m2po",
+            "https://www.bbc.com/burmese/articles/ckgd47eev80o",
+            "https://www.bbc.com/burmese/articles/cpq8vep2qyeo"
+          ]
+        },
+        {
+          "url": "https://www.bbc.com/burmese/sitemap.xml",
+          "type": "urlset",
+          "url_count": 100,
+          "has_lastmod": true,
+          "most_recent": "2014-09-25T01:54:18+00:00",
+          "sample_urls": [
+            "http://www.bbc.co.uk/burmese/burma/2014/09/140925_htayaung_business_forum.shtml",
+            "http://www.bbc.co.uk/burmese/world/2014/09/140924_obama_unga.shtml"
+          ]
+        },
+        {
+          "url": "https://www.bbc.com/sitemaps/https-index-com-archive.xml",
+          "type": "index",
+          "url_count": 122,
+          "has_lastmod": true,
+          "most_recent": null,
+          "sample_urls": [
+            "https://www.bbc.com/sitemaps/https-sitemap-com-archive-1.xml",
+            "https://www.bbc.com/sitemaps/https-sitemap-com-archive-2.xml"
+          ]
+        }
+      ],
+      "feeds": [
+        {
+          "url": "https://www.bbc.com/burmese/index.xml",
+          "format": "rss",
+          "item_count": 25,
+          "has_pubdate": true,
+          "most_recent": "2026-08-01T10:59:28Z"
+        },
+        {
+          "url": "https://feeds.bbci.co.uk/burmese/rss.xml",
+          "format": "rss",
+          "item_count": 25,
+          "has_pubdate": true,
+          "most_recent": "2026-08-01T10:59:28Z"
+        }
+      ],
+      "search": {
+        "supported": false,
+        "url_template": null,
+        "method": "GET",
+        "verified": false,
+        "result_count_for_test_kw": 0,
+        "notes": "https://www.bbc.com/burmese/search?q=Myanmar returns HTTP 404 and zero /burmese/articles/ links. No usable section-scoped search endpoint found. No search <form> in the Burmese homepage HTML."
+      },
+      "wp_api": {
+        "available": false,
+        "posts_endpoint": null,
+        "search_endpoint": null,
+        "verified": false,
+        "sample_count": 0
+      },
+      "oai_pmh": {},
+      "article_url_patterns": [
+        "^https://www\\.bbc\\.com/burmese/articles/[a-z0-9]{10,}$",
+        "^https?://www\\.bbc\\.co\\.uk/burmese/[a-z]+/\\d{4}/\\d{2}/\\d{6}_[a-z0-9_]+\\.shtml$"
+      ],
+      "listing_url_patterns": [
+        "^https://www\\.bbc\\.com/burmese/?$",
+        "^https://www\\.bbc\\.com/burmese/topics/[a-z0-9]+$",
+        "^https://www\\.bbc\\.com/burmese/(popular|programmes)"
+      ],
+      "estimated_total_documents": 0,
+      "publishing_frequency": null,
+      "notes": "Static HTML is fine: bbc.com/burmese homepage contains 54 distinct /burmese/articles/ links with no JS. /burmese/sitemap.xml exists but is a dead 2014 bbc.co.uk archive (100 URLs, last modified 2014-09-25) — do not use it for recent content. The 122-shard https-index-com-archive.xml holds ~6.1M URLs across all languages; I checked shard 1 (50,000 URLs, all 2009-era, ZERO /burmese/ entries) so I could not confirm which shards hold Burmese archive content — treat archive backfill as unverified and expensive. www.bbc.com/burmese/rss.xml is 404; the correct feed path is /burmese/index.xml."
+    },
+    "bnionline.net": {
+      "domain": "bnionline.net",
+      "group": "myanmar",
+      "seed_url": "https://www.bnionline.net/en",
+      "enabled": true,
+      "strategy": "search",
+      "strategy_rationale": "The sitemap is useless — 13 URLs, all section landing pages, no <lastmod>. The RSS feed at /rss.xml (also served at /en/rss.xml, identical) has 10 items whose newest pubDate is 2023-11-10, i.e. stale, and it mixes in non-article nodes (/en/ads/taxonomy-ads). The only working discovery surface is Drupal's /search/node/{kw} with ?page=N pagination, verified to paginate with fresh distinct results. Supplement with a shallow deep_crawl of the section listings (/en/news, /en/features, /en/opinion, /en/ethnic-media) — the homepage alone exposes 23 article URLs in static HTML.",
+      "confidence": "high",
+      "robots": {
+        "respect": true,
+        "override_reason": null,
+        "crawl_delay": null
+      },
+      "transport": {
+        "needs_full_browser_headers": false,
+        "needs_proxy": false,
+        "force_ipv4": false,
+        "force_https": false,
+        "timeout_s": 25,
+        "max_retries": 2
+      },
+      "allowed_hosts": null,
+      "sitemaps": [
+        {
+          "url": "https://www.bnionline.net/sitemap.xml",
+          "type": "urlset",
+          "url_count": 13,
+          "has_lastmod": false,
+          "most_recent": null,
+          "sample_urls": [
+            "https://bnionline.net/en",
+            "https://bnionline.net/en/archive",
+            "https://bnionline.net/en/archive-two",
+            "https://bnionline.net/en/news",
+            "https://bnionline.net/en/features"
+          ]
+        }
+      ],
+      "feeds": [
+        {
+          "url": "https://www.bnionline.net/en/rss.xml",
+          "format": "rss",
+          "item_count": 10,
+          "has_pubdate": true,
+          "most_recent": "2023-11-10T03:27:14+00:00"
+        }
+      ],
+      "search": {
+        "supported": true,
+        "url_template": "https://www.bnionline.net/en/search/node/{keyword}?page={page}",
+        "method": "GET",
+        "verified": true,
+        "result_count_for_test_kw": 10,
+        "notes": "Verified: /en/search/node/Myanmar returns 10 distinct /en/news/{slug} article links in static HTML; ?page=1 returns 10 further distinct articles, so Drupal pagination works. The equivalent ?keys= form (/en/search/node?keys=Myanmar) also works. The homepage <form> is a POST search block, but the GET /search/node/ path is the usable one."
+      },
+      "wp_api": {
+        "available": false,
+        "posts_endpoint": null,
+        "search_endpoint": null,
+        "verified": false,
+        "sample_count": 0
+      },
+      "oai_pmh": {},
+      "article_url_patterns": [
+        "^https://www\\.bnionline\\.net/en/news/[a-z0-9-]{10,}$",
+        "^https://www\\.bnionline\\.net/en/(features|opinion|ethnic-media)/[a-z0-9-]{10,}$"
+      ],
+      "listing_url_patterns": [
+        "^https://www\\.bnionline\\.net/en/(news|features|opinion)/?$",
+        "^https://www\\.bnionline\\.net/en/search/node/",
+        "^https://www\\.bnionline\\.net/en/(archive|archive-two)"
+      ],
+      "estimated_total_documents": 0,
+      "publishing_frequency": null,
+      "notes": "Drupal 7 (generator meta). robots.txt is fetchable but contains ONLY Cloudflare 'content-signals' comment boilerplate — zero User-agent/Disallow/Sitemap directives, so nothing is technically disallowed. /feed and /en/feed are 404; /news-sitemap.xml and /sitemap_index.xml are 404. Site also has a Burmese section at /mm/ — scope to /en/ if English-only is wanted."
+    },
+    "burmese.voanews.com": {
+      "domain": "burmese.voanews.com",
+      "group": "myanmar",
+      "seed_url": "https://burmese.voanews.com/",
+      "enabled": true,
+      "strategy": "news_sitemap",
+      "strategy_rationale": "sitemap_409_news.xml.gz is a true Google News sitemap (<news:news>) and is the freshest surface on the site — 4 items, newest publication_date 2026-08-01T14:30Z, matching the live homepage. Poll it plus sitemap_409_latest.xml.gz (13 recent URLs). For backfill, sitemap_409_1..9.xml.gz give ~180,000 archived article URLs with <lastmod> (shard 1 = 20,000 URLs down to 2026-07, shard 2 back to 2024, shard 3 to 2023). Do NOT rely on RSS: every one of the ~60 feeds listed on /rssfeeds is stale — the newest pubDate I found anywhere was 2025-04-23, roughly when the VOA service was cut back, even though the sitemaps and homepage show 2026-08-01 content.",
+      "confidence": "high",
+      "robots": {
+        "respect": true,
+        "override_reason": null,
+        "crawl_delay": null
+      },
+      "transport": {
+        "needs_full_browser_headers": false,
+        "needs_proxy": false,
+        "force_ipv4": false,
+        "force_https": false,
+        "timeout_s": 25,
+        "max_retries": 2
+      },
+      "allowed_hosts": null,
+      "sitemaps": [
+        {
+          "url": "https://burmese.voanews.com/sitemap.xml",
+          "type": "index",
+          "url_count": 14,
+          "has_lastmod": true,
+          "most_recent": "2026-07-26T07:14:29.7759952Z",
+          "sample_urls": [
+            "https://burmese.voanews.com/sitemap_409_1.xml.gz",
+            "https://burmese.voanews.com/sitemap_409_latest.xml.gz",
+            "https://burmese.voanews.com/sitemap_409_news.xml.gz",
+            "https://burmese.voanews.com/sitemap_409_sections.xml.gz",
+            "https://burmese.voanews.com/sitemap_409_videos.xml.gz"
+          ]
+        },
+        {
+          "url": "https://burmese.voanews.com/sitemap_409_news.xml.gz",
+          "type": "news",
+          "url_count": 4,
+          "has_lastmod": true,
+          "most_recent": "2026-08-01T14:30:00Z",
+          "sample_urls": [
+            "https://burmese.voanews.com/a/8173125.html",
+            "https://burmese.voanews.com/a/8173124.html",
+            "https://burmese.voanews.com/a/8172712.html"
+          ]
+        },
+        {
+          "url": "https://burmese.voanews.com/sitemap_409_latest.xml.gz",
+          "type": "urlset",
+          "url_count": 13,
+          "has_lastmod": true,
+          "most_recent": "2026-07-18T00:00:04.14Z",
+          "sample_urls": [
+            "https://burmese.voanews.com/a/8173125.html",
+            "https://burmese.voanews.com/a/8173124.html"
+          ]
+        },
+        {
+          "url": "https://burmese.voanews.com/sitemap_409_1.xml.gz",
+          "type": "urlset",
+          "url_count": 20000,
+          "has_lastmod": true,
+          "most_recent": "2026-07-12T00:00:03.503Z",
+          "sample_urls": [
+            "https://burmese.voanews.com/a/8170745.html",
+            "https://burmese.voanews.com/a/8170510.html",
+            "https://burmese.voanews.com/a/8170509.html"
+          ]
+        },
+        {
+          "url": "https://burmese.voanews.com/sitemap_409_2.xml.gz",
+          "type": "urlset",
+          "url_count": 20000,
+          "has_lastmod": true,
+          "most_recent": "2024-06-12T22:02:14.933Z",
+          "sample_urls": [
+            "https://burmese.voanews.com/a/joe-biden-democracy-top-summit-online-meeting-/7027660.html"
+          ]
+        }
+      ],
+      "feeds": [
+        {
+          "url": "https://burmese.voanews.com/api/",
+          "format": "rss",
+          "item_count": 20,
+          "has_pubdate": true,
+          "most_recent": "2025-04-23T07:06:44+06:30"
+        },
+        {
+          "url": "https://burmese.voanews.com/api/zb_u_l-vomx-tpeqrjy",
+          "format": "rss",
+          "item_count": 20,
+          "has_pubdate": true,
+          "most_recent": "2025-03-15T18:17:09+06:30"
+        }
+      ],
+      "search": {
+        "supported": true,
+        "url_template": "https://burmese.voanews.com/s?k={keyword}&pi={page}&r=any&pp=10",
+        "method": "GET",
+        "verified": true,
+        "result_count_for_test_kw": 10,
+        "notes": "Verified: /s?k=Myanmar returns 10 /a/{id}.html article links in static HTML; &pi=2 returns 4 further distinct articles so pagination works. BUT robots.txt explicitly Disallows /s?k=* — using it is a robots violation. Prefer the sitemaps."
+      },
+      "wp_api": {
+        "available": false,
+        "posts_endpoint": null,
+        "search_endpoint": null,
+        "verified": false,
+        "sample_count": 0
+      },
+      "oai_pmh": {},
+      "article_url_patterns": [
+        "^https://burmese\\.voanews\\.com/a/\\d{6,}\\.html$",
+        "^https://burmese\\.voanews\\.com/a/[a-z0-9-]+/\\d{6,}\\.html$"
+      ],
+      "listing_url_patterns": [
+        "^https://burmese\\.voanews\\.com/p/\\d+\\.html$",
+        "^https://burmese\\.voanews\\.com/(s\\?|rssfeeds|z/)"
+      ],
+      "estimated_total_documents": 0,
+      "publishing_frequency": null,
+      "notes": "Static HTML fine (155 links, 10 /a/*.html on the homepage). The <link rel=alternate type=application/rss+xml> on the homepage points at /api/ which is one of the stale feeds. This is a section of the multinational VOA network — scope strictly to the burmese.voanews.com host; do not follow into www.voanews.com or projects.voanews.com. Article URL ids are 7-digit and increasing."
+    },
+    "cgtn.com": {
+      "domain": "cgtn.com",
+      "group": "china",
+      "seed_url": "https://www.cgtn.com",
+      "enabled": true,
+      "strategy": "news_sitemap",
+      "strategy_rationale": "sitemap_latestnews.xml is a true Google News sitemap with 516 entries and publication dates current to the hour of probing (2026-08-01T21:44Z) - poll it on a short interval for recency. sitemap_news.xml (30000 news entries) gives the deeper backlog in a single 17MB fetch, and 22 yearly archive sitemaps cover 2017-2025. Search and feeds are unavailable, so sitemaps are the only viable route - fortunately they are the best of the five sites.",
+      "confidence": "high",
+      "robots": {
+        "respect": true,
+        "override_reason": null,
+        "crawl_delay": null
+      },
+      "transport": {
+        "needs_full_browser_headers": false,
+        "needs_proxy": false,
+        "force_ipv4": false,
+        "force_https": false,
+        "timeout_s": 25,
+        "max_retries": 2
+      },
+      "allowed_hosts": [
+        "*.cgtn.com"
+      ],
+      "sitemaps": [
+        {
+          "url": "https://www.cgtn.com/sitemap_latestnews.xml",
+          "type": "news",
+          "url_count": 516,
+          "has_lastmod": true,
+          "most_recent": "2026-08-01T21:44Z",
+          "sample_urls": [
+            "https://newsaf.cgtn.com/news/2026-07-31/Chinese-vice-premier-holds-video-call-with-US-treasury-secretary-1Pd2OqqkiJi/p.html",
+            "https://newsaf.cgtn.com/news/2026-07-31/DR-Congo-says-Rwanda-linked-armed-group-agrees-to-disarm-1PcWumDMVqw/p.html",
+            "https://newseu.cgtn.com/news/2026-07-31/Not-for-the-paint-hearted-One-man-s-war-against-Rome-1PcYtDwGyicto/p.html",
+            "https://news.cgtn.com/news/2026-08-01/Chinese-embassies-mark-PLA-s-99th-founding-anniversary-1PfSN4JiDzG/p.html",
+            "https://news.cgtn.com/news/2026-08-01/PLA-holds-joint-naval-air-drill-around-Huangyan-Dao-1PfjAN6tO2A/p.html"
+          ],
+          "note": "GOOGLE NEWS SITEMAP - all 516 entries carry <news:news> with <news:publication_date>. Host split: news.cgtn.com 482, newsus 15, newsaf 11, newseu 8. THIS IS THE HIGHEST-VALUE ENDPOINT."
+        },
+        {
+          "url": "https://www.cgtn.com/sitemap_news.xml",
+          "type": "news",
+          "url_count": 30000,
+          "has_lastmod": true,
+          "most_recent": "2026-07-21T19:19Z",
+          "sample_urls": [
+            "https://news.cgtn.com/news/2026-02-07/Live-Experience-the-charm-of-Suzhou-Bay-Cultural-Center-in-Suzhou-1GjE3Ss406I/p.html",
+            "https://newseu.cgtn.com/news/2026-01-01/Croatia-s-euro-experience-offers-lessons-for-Bulgaria-s-2026-entry-1ICSbj2wwWQ/p.html",
+            "https://newseu.cgtn.com/news/2026-02-23/Historic-Verona-prepares-to-go-center-stage-1IuHRy2eLPa/p.html",
+            "https://news.cgtn.com/news/2026-02-07/Live-Experience-the-charm-of-Suzhou-Bay-Cultural-Center-in-Suzhou-1GjE3Ss406I/p.html",
+            "https://news.cgtn.com/news/2026-08-01/Chinese-embassies-mark-PLA-s-99th-founding-anniversary-1PfSN4JiDzG/p.html"
+          ],
+          "note": "30000 <news:news> entries, 17.2 MB, ~3.4s to fetch. Hosts: news 28889, newsaf 396, newsus 395, newseu 320. Covers the current year backlog."
+        },
+        {
+          "url": "https://www.cgtn.com/sitemap.xml",
+          "type": "index",
+          "url_count": 27,
+          "has_lastmod": true,
+          "most_recent": "2026-08-01T10:00Z",
+          "sample_urls": [
+            "https://www.cgtn.com/sitemap_archived_2019_2.xml",
+            "https://www.cgtn.com/sitemap_archived_2020.xml",
+            "https://www.cgtn.com/sitemap_archived_2022_2.xml",
+            "https://www.cgtn.com/sitemap_archived_2024.xml",
+            "https://www.cgtn.com/sitemap_archived_2025_4.xml"
+          ],
+          "note": "Sitemap index listing 27 child sitemaps (news + latestnews + sections + specials + figures + yearly archives 2017-2025)."
+        },
+        {
+          "url": "https://www.cgtn.com/sitemap_sections.xml",
+          "type": "urlset",
+          "url_count": 211,
+          "has_lastmod": true,
+          "most_recent": "2026-03-13T15:37Z",
+          "sample_urls": [
+            "https://www.cgtn.com/business",
+            "https://www.cgtn.com/china",
+            "https://www.cgtn.com/clab",
+            "https://www.cgtn.com/culture",
+            "https://www.cgtn.com/europe"
+          ],
+          "note": "Section/listing pages only, not articles."
+        }
+      ],
+      "feeds": [],
+      "search": {
+        "supported": false,
+        "url_template": null,
+        "method": "GET",
+        "verified": false,
+        "result_count_for_test_kw": 0,
+        "notes": "No usable search. The homepage has a .search-input div but no <form> element at all in the static HTML. https://www.cgtn.com/search?keyword=China returns 200 but 302s to https://www.cgtn.com/newspal, a JS SPA shell with 0 result links in raw HTML. search.cgtn.com does not resolve (DNS NXDOMAIN). /api/search and news.cgtn.com/search both 404. Search is unusable without a JS engine."
+      },
+      "wp_api": {},
+      "oai_pmh": {},
+      "article_url_patterns": [
+        "^https://news(af|eu|us)?\\.cgtn\\.com/news/\\d{4}-\\d{2}-\\d{2}/[A-Za-z0-9\\-]+-[A-Za-z0-9]{11,}/p\\.html$",
+        "^https://news[a-z]{0,2}\\.cgtn\\.com/news/\\d{4}-\\d{2}-\\d{2}/.+/p\\.html",
+        "/news/\\d{4}-\\d{2}-\\d{2}/[^/]+/p\\.html$"
+      ],
+      "listing_url_patterns": [
+        "^https://www\\.cgtn\\.com/[a-z\\-]+/?$",
+        "^https://www\\.cgtn\\.com/(newspal|special|sitemap)"
+      ],
+      "estimated_total_documents": 0,
+      "publishing_frequency": null,
+      "notes": "ROOT CAUSE OF THE PRODUCTION '0 matches from 140 attempts': CGTN articles are NOT served from www.cgtn.com. They live exclusively on the regional subdomains news.cgtn.com / newseu.cgtn.com / newsus.cgtn.com / newsaf.cgtn.com. I verified this directly: https://newsaf.cgtn.com/news/2026-07-31/Chinese-vice-premier-holds-video-call-with-US-treasury-secretary-1Pd2OqqkiJi/p.html returns 200 with a real title and 1466 chars of <p> body text, while the identical path on www.cgtn.com returns 404 (a 116626-byte HTML error page). Any crawler seeded at https://www.cgtn.com with a same-host or exact-domain restriction will fetch 140 URLs and match 0 articles. FIX: allow *.cgtn.com, not www.cgtn.com. Secondary trap: the 404 page is a large 116KB HTML document, so length-based or content-based validity checks pass on 404s - status code must be checked. Reachability is fine without a VPN (1.26s homepage, 0.3s robots). Homepage raw HTML has 478 links incl. 73 article links, so JS is not required for the homepage - only for search."
+    },
+    "chinadaily.com.cn": {
+      "domain": "chinadaily.com.cn",
+      "group": "china",
+      "seed_url": "https://www.chinadaily.com.cn/",
+      "enabled": true,
+      "strategy": "search",
+      "strategy_rationale": "The sitemap is frozen at 2014 and the RSS feeds are frozen at 2017, so neither can find recent articles. The newssearch.chinadaily.com.cn JSON API is the only high-yield, verified route: it is date-sortable (sort=dp), paginated, returns full article body text inline, and its newest record was published the same day I probed. Homepage/section deep crawl is a good secondary (104 distinct article URLs in raw homepage HTML; 40-45 per section page) but only surfaces a shallow window.",
+      "confidence": "high",
+      "robots": {
+        "respect": true,
+        "override_reason": null,
+        "crawl_delay": null
+      },
+      "transport": {
+        "needs_full_browser_headers": false,
+        "needs_proxy": false,
+        "force_ipv4": false,
+        "force_https": false,
+        "timeout_s": 25,
+        "max_retries": 2
+      },
+      "allowed_hosts": null,
+      "sitemaps": [
+        {
+          "url": "https://www.chinadaily.com.cn/sitemap.xml",
+          "type": "urlset",
+          "url_count": 27298,
+          "has_lastmod": true,
+          "most_recent": "2014-07-26 11:00",
+          "sample_urls": [
+            "http://www.chinadaily.com.cn/sports/node_1139521.htm",
+            "http://www.chinadaily.com.cn/sports/node_1131321.htm",
+            "http://www.chinadaily.com.cn/sports/node_1133761.htm",
+            "http://www.chinadaily.com.cn/sports/Ding-Junhui.html",
+            "http://www.chinadaily.com.cn/sports/2014-World-Cup.html"
+          ],
+          "note": "STALE AND USELESS for recent news: it is a topic/section-node sitemap, newest lastmod is 2014-07-26. No <news:news> entries."
+        }
+      ],
+      "feeds": [
+        {
+          "url": "https://www.chinadaily.com.cn/rss/china_rss.xml",
+          "format": "rss",
+          "item_count": 100,
+          "has_pubdate": false,
+          "most_recent": "2017-12-12",
+          "note": "DEAD. Returns 200 with 100 items but newest item is 2017-12-12 and <pubDate> is absent. Same for world_rss.xml."
+        },
+        {
+          "url": "https://www.chinadaily.com.cn/rss/world_rss.xml",
+          "format": "rss",
+          "item_count": 100,
+          "has_pubdate": false,
+          "most_recent": "2017-12-12",
+          "note": "DEAD, frozen at 2017."
+        }
+      ],
+      "search": {
+        "supported": true,
+        "url_template": "https://newssearch.chinadaily.com.cn/rest/en/search?query={keyword}&size=20&sort=dp&page={page}",
+        "method": "GET",
+        "verified": true,
+        "result_count_for_test_kw": 956580,
+        "notes": "JSON API (application/json), NOT the HTML page. Verified with keyword 'China': totalElements=956580, totalPages=47829 at size=20. sort=dp returns newest-first; top result publishTime 2026-08-01T12:14:13Z. Each record has url, title, source, publishTime (epoch ms), plainText body. page is 0-indexed. Response ~1.9s. The HTML wrapper https://newssearch.chinadaily.com.cn/en/search?query={keyword} also returns 200 but renders results via JS so it yields 0 links in static HTML."
+      },
+      "wp_api": {},
+      "oai_pmh": {},
+      "article_url_patterns": [
+        "^https?://www\\.chinadaily\\.com\\.cn/a/\\d{6}/\\d{2}/WS[0-9a-f]{20,}\\.html$",
+        "^https?://[a-z]+\\.chinadaily\\.com\\.cn/a/\\d{6}/\\d{2}/WS[0-9a-f]+\\.html",
+        "/\\d{4}-\\d{2}/\\d{2}/content_\\d+\\.htm$"
+      ],
+      "listing_url_patterns": [
+        "/node_\\d+\\.htm$",
+        "^https?://www\\.chinadaily\\.com\\.cn/[a-z]+/?$"
+      ],
+      "estimated_total_documents": 0,
+      "publishing_frequency": null,
+      "notes": "No VPN needed - 0.35s from this machine, plain 200, no challenge/WAF. Homepage raw HTML contains 364 links of which 104 are article URLs, so JS is not required. The 404 page is 6797 bytes of HTML, so a crawler must check status codes rather than content length. Article slugs use the /a/YYYYMM/DD/WS<hex>.html shape; the older archive uses /YYYY-MM/DD/content_<id>.htm."
+    },
+    "dvb.no": {
+      "domain": "dvb.no",
+      "group": "myanmar",
+      "seed_url": "https://www.dvb.no/",
+      "enabled": true,
+      "strategy": "sitemap",
+      "strategy_rationale": "Best coverage by far: burmese.dvb.no/sitemap.xml is an index of 21 shards; shards 1-14 are pure article URLs (/post/{id}) totalling 136,724 articles, all with <lastmod>, freshest 2026-08-01. Shards 0 and 15-20 are pages/tags (55,225 URLs) and should be excluded. Complement with english.dvb.no WP REST API (verified, X-WP-Total = 17,532 posts; search=Myanmar -> 7,921 results) for the English edition and for keyword-scoped pulls. No Google News sitemap exists on either host.",
+      "confidence": "high",
+      "robots": {
+        "respect": true,
+        "override_reason": null,
+        "crawl_delay": 2.0
+      },
+      "transport": {
+        "needs_full_browser_headers": false,
+        "needs_proxy": false,
+        "force_ipv4": false,
+        "force_https": false,
+        "timeout_s": 25,
+        "max_retries": 2
+      },
+      "allowed_hosts": null,
+      "sitemaps": [
+        {
+          "url": "https://burmese.dvb.no/sitemap.xml",
+          "type": "index",
+          "url_count": 21,
+          "has_lastmod": true,
+          "most_recent": "2026-08-01T12:34:03.715Z",
+          "sample_urls": [
+            "https://burmese.dvb.no/sitemap/0.xml",
+            "https://burmese.dvb.no/sitemap/1.xml",
+            "https://burmese.dvb.no/sitemap/2.xml",
+            "https://burmese.dvb.no/sitemap/14.xml",
+            "https://burmese.dvb.no/sitemap/20.xml"
+          ]
+        },
+        {
+          "url": "https://burmese.dvb.no/sitemap/3.xml",
+          "type": "urlset",
+          "url_count": 10000,
+          "has_lastmod": true,
+          "most_recent": "2026-08-01T12:12:38.008Z",
+          "sample_urls": [
+            "https://burmese.dvb.no/post/61173",
+            "https://burmese.dvb.no/post/61175",
+            "https://burmese.dvb.no/post/61179",
+            "https://burmese.dvb.no/post/381",
+            "https://burmese.dvb.no/post/383"
+          ]
+        },
+        {
+          "url": "https://english.dvb.no/sitemap_index.xml",
+          "type": "index",
+          "url_count": 50,
+          "has_lastmod": true,
+          "most_recent": "2026-08-01T06:19:36+00:00",
+          "sample_urls": [
+            "https://english.dvb.no/post-sitemap.xml",
+            "https://english.dvb.no/post-sitemap2.xml",
+            "https://english.dvb.no/post-sitemap8.xml"
+          ]
+        },
+        {
+          "url": "https://english.dvb.no/post-sitemap.xml",
+          "type": "urlset",
+          "url_count": 1001,
+          "has_lastmod": true,
+          "most_recent": "2026-08-01T06:19:36+00:00",
+          "sample_urls": [
+            "https://english.dvb.no/news/",
+            "https://english.dvb.no/staring-at-a-medical-black-hole-2/"
+          ]
+        }
+      ],
+      "feeds": [
+        {
+          "url": "https://english.dvb.no/feed/",
+          "format": "rss",
+          "item_count": 10,
+          "has_pubdate": true,
+          "most_recent": "2026-08-01T06:16:13+00:00"
+        }
+      ],
+      "search": {
+        "supported": true,
+        "url_template": "https://burmese.dvb.no/search?q={keyword}",
+        "method": "GET",
+        "verified": true,
+        "result_count_for_test_kw": 10,
+        "notes": "Verified: /search?q=Myanmar returns 10 /post/{id} article links in the raw HTML (no JS needed). Burmese-language site so an English keyword returns few hits; use Burmese keywords for real coverage. English side is better served by the WP REST API."
+      },
+      "wp_api": {
+        "available": true,
+        "posts_endpoint": "https://english.dvb.no/wp-json/wp/v2/posts?per_page=100",
+        "search_endpoint": "https://english.dvb.no/wp-json/wp/v2/posts?search={keyword}&per_page=100",
+        "verified": true,
+        "sample_count": 3
+      },
+      "oai_pmh": {},
+      "article_url_patterns": [
+        "^https://burmese\\.dvb\\.no/post/\\d+$",
+        "^https://english\\.dvb\\.no/(?!category/|tag/|author/|page/)[a-z0-9-]{10,}/$"
+      ],
+      "listing_url_patterns": [
+        "^https://burmese\\.dvb\\.no/(categories|tags)/",
+        "^https://english\\.dvb\\.no/(category|tag|author|page)/"
+      ],
+      "estimated_total_documents": 0,
+      "publishing_frequency": null,
+      "notes": "www.dvb.no 301-redirects to burmese.dvb.no. Burmese front end is Next.js but server-rendered — 116 links present in static HTML, so no JS needed. burmese.dvb.no has NO feed and NO wp-json (/feed/, /rss, /rss.xml, /wp-json/ all return the SPA shell or 404); the WP backend lives only on english.dvb.no. robots.txt Crawl-delay: 2 and explicitly bans the 'news-please' UA — do not use that UA string."
+    },
+    "elevenmyanmar.com": {
+      "domain": "elevenmyanmar.com",
+      "group": "myanmar",
+      "seed_url": "https://elevenmyanmar.com/",
+      "enabled": true,
+      "strategy": "search",
+      "strategy_rationale": "There is NO sitemap: /sitemap.xml, /sitemap_index.xml, /sitemap.xml?page=1, /news-sitemap.xml all 404 (only an HTML /sitemap page exists) and robots.txt declares none. The RSS feed /rss.xml has 2 items whose newest pubDate is 2022-05-11 — dead. So the only verified paginating surface is Drupal /search/node/{kw}?page=N. For full coverage, combine with a deep_crawl of the section listings: /news exposes 26 article links per page in static HTML and its pager advertises page=668, implying roughly 17,000 articles reachable by paging /news?page=N. Site is live and fresh (homepage carries 01 Aug 2026 datelines).",
+      "confidence": "medium",
+      "robots": {
+        "respect": true,
+        "override_reason": null,
+        "crawl_delay": null
+      },
+      "transport": {
+        "needs_full_browser_headers": false,
+        "needs_proxy": false,
+        "force_ipv4": false,
+        "force_https": false,
+        "timeout_s": 25,
+        "max_retries": 2
+      },
+      "allowed_hosts": null,
+      "sitemaps": [],
+      "feeds": [
+        {
+          "url": "https://elevenmyanmar.com/rss.xml",
+          "format": "rss",
+          "item_count": 2,
+          "has_pubdate": true,
+          "most_recent": "2022-05-11T06:15:15+00:00"
+        }
+      ],
+      "search": {
+        "supported": true,
+        "url_template": "https://elevenmyanmar.com/search/node/{keyword}?page={page}",
+        "method": "GET",
+        "verified": true,
+        "result_count_for_test_kw": 10,
+        "notes": "Verified: /search/node/Myanmar returns 10 distinct /news/{slug} article links in static HTML; ?page=1 returns 10 completely different articles, so Drupal pagination works. There is also a POST search block on the homepage and a GET advanced form at /search/node/all, but the /search/node/{kw} path is the clean one."
+      },
+      "wp_api": {
+        "available": false,
+        "posts_endpoint": null,
+        "search_endpoint": null,
+        "verified": false,
+        "sample_count": 0
+      },
+      "oai_pmh": {},
+      "article_url_patterns": [
+        "^https://elevenmyanmar\\.com/(news|business|crime|opinion|interview|sports)/[a-z0-9-]{10,}$"
+      ],
+      "listing_url_patterns": [
+        "^https://elevenmyanmar\\.com/(news|business|crime|opinion|interview|sports)(\\?page=\\d+)?$",
+        "^https://elevenmyanmar\\.com/search/node/"
+      ],
+      "estimated_total_documents": 0,
+      "publishing_frequency": null,
+      "notes": "Drupal 7 (generator meta). robots.txt is fetchable but is 100% Cloudflare 'content-signals' comment boilerplate — no User-agent/Disallow/Sitemap lines at all. CAUTION: the /news pager <a href> values echo back an injected query string (a log4j-style ${jndi:...} payload left by some scanner) — the site reflects arbitrary query params into its pager links, so build pager URLs yourself rather than following the ones in the HTML. Confidence medium because I verified the pager claims 668 pages but only fetched pages 0 and 1, and /news?page=1 returned the same 26 links as page 0 (the ?page= param appears to work on /search/node/ but not on /news) — validate section pagination before relying on it. Homepage yields 32 static article links."
+    },
+    "fmprc.gov.cn": {
+      "domain": "fmprc.gov.cn",
+      "group": "china",
+      "seed_url": "https://www.fmprc.gov.cn/eng/",
+      "enabled": true,
+      "strategy": "deep_crawl",
+      "strategy_rationale": "There is no sitemap, no feed, and no non-JS search, so paginated section listings are the only verified route - and they work well. Each English section index exposes 7 article links in raw HTML and paginates via index_N.html. I fetched 12 listing pages across 6 sections (xw/zyxw, xw/wjbxw, xw/fyrbt/lxjzh, xw/zwbd, wjbzhd, xw/wsrc) and collected 83 distinct article URLs, all HTTP 200 in 0.5-0.9s. Walking index_0..index_N per section gives unbounded backfill.",
+      "confidence": "medium",
+      "robots": {
+        "respect": true,
+        "override_reason": null,
+        "crawl_delay": null
+      },
+      "transport": {
+        "needs_full_browser_headers": false,
+        "needs_proxy": false,
+        "force_ipv4": false,
+        "force_https": false,
+        "timeout_s": 25,
+        "max_retries": 2
+      },
+      "allowed_hosts": null,
+      "sitemaps": [],
+      "feeds": [],
+      "search": {
+        "supported": false,
+        "url_template": null,
+        "method": "GET",
+        "verified": false,
+        "result_count_for_test_kw": 0,
+        "notes": "NOT VERIFIED - could not get search to work. The English homepage links to https://www.mfa.gov.cn/irs-c-web/search_eng.shtml?code=18fe7c6489d&searchBy=title&searchWord= (TRS IRS search). Fetching it with searchWord=China returns 200 and 55693 bytes, but results are injected by JS - no result links in the static HTML. Guessed backend endpoints (/irs-c-search-web/search, /irs-c-web/search) returned the soft-404 maintenance page or a hard 404. A JS-capable fetch or reverse-engineering the IRS POST API would be needed; I did not verify either."
+      },
+      "wp_api": {},
+      "oai_pmh": {},
+      "article_url_patterns": [
+        "^https://www\\.fmprc\\.gov\\.cn/eng/(xw|wjbzhd|zy|gjhdq_\\d+)/[a-z_0-9/]*\\d{6}/t\\d{8}_\\d+\\.html$",
+        "/eng/.*/\\d{6}/t\\d{8}_\\d+\\.html$",
+        "^https://www\\.mfa\\.gov\\.cn/web/.*/\\d{6}/t\\d{8}_\\d+\\.shtml$"
+      ],
+      "listing_url_patterns": [
+        "^https://www\\.fmprc\\.gov\\.cn/eng/[a-z_0-9/]+/(index(_\\d+)?\\.html)?$",
+        "/index_\\d+\\.html$"
+      ],
+      "estimated_total_documents": 0,
+      "publishing_frequency": null,
+      "notes": "CRITICAL SEED URL BUG: the configured seed https://www.fmprc.gov.cn/en/ is WRONG. It 302s to https://www.mfa.gov.cn/web/system/index_17321.shtml, a Chinese-language SYSTEM MAINTENANCE page that returns HTTP 200. The correct English root is https://www.fmprc.gov.cn/eng/ (also served as https://www.mfa.gov.cn/eng/), which returns 200 in 0.64s with 138 links and 41 article links in raw HTML. SOFT-404 TRAP: every unknown path under fmprc.gov.cn/mfa.gov.cn returns HTTP 200 with that same 55990-byte maintenance page - /sitemap.xml, /rss, /feed, /atom.xml, /robots.txt all 'succeed'. A crawler must detect the redirect to /web/system/index_17321.shtml (or the fixed 55990 byte length) and treat it as a failure, otherwise it will ingest hundreds of copies of a maintenance page as if they were articles. Freshness is good: newest articles found were 2026-07-31. Article extension is .html under /eng/ (NOT .shtml - .shtml is the old mfa.gov.cn/web Chinese tree). No VPN needed. Note sources.json mislabels this site as 'National Statistics bureau China'; it is actually the Ministry of Foreign Affairs."
+    },
+    "globaltimes.cn": {
+      "domain": "globaltimes.cn",
+      "group": "china",
+      "seed_url": "https://www.globaltimes.cn",
+      "enabled": true,
+      "strategy": "search",
+      "strategy_rationale": "The news sitemap is perfectly fresh but caps at 30 URLs, which is fine for a fast poller but useless for backfill or any volume. The SearchCtrl endpoint is the only route to depth: 815141 total records, GET-addressable, paginated, and date-range filterable (2293 records for July 2026 alone). Recommended combination: poll sitemap.xml for real-time recency, and use SearchCtrl with begin_date/end_date for backfill and for keyword-targeted collection. Section pages are a solid third option - /opinion/ alone exposed 210 distinct article URLs in raw HTML.",
+      "confidence": "high",
+      "robots": {
+        "respect": true,
+        "override_reason": null,
+        "crawl_delay": null
+      },
+      "transport": {
+        "needs_full_browser_headers": false,
+        "needs_proxy": false,
+        "force_ipv4": false,
+        "force_https": false,
+        "timeout_s": 25,
+        "max_retries": 2
+      },
+      "allowed_hosts": null,
+      "sitemaps": [
+        {
+          "url": "https://www.globaltimes.cn/sitemap.xml",
+          "type": "news",
+          "url_count": 30,
+          "has_lastmod": true,
+          "most_recent": "2026-08-01T12:04:21+08:00",
+          "sample_urls": [
+            "https://www.globaltimes.cn/page/202608/1367313.shtml",
+            "https://www.globaltimes.cn/page/202608/1367312.shtml",
+            "https://www.globaltimes.cn/page/202608/1367311.shtml",
+            "https://www.globaltimes.cn/page/202608/1367310.shtml",
+            "https://www.globaltimes.cn/page/202608/1367309.shtml"
+          ],
+          "note": "Google News sitemap (<news:news> present) but a rolling window of only the 30 most recent articles. Extremely fresh but tiny. No sitemap index, no archive sitemaps: sitemap_index.xml, sitemap-index.xml, news-sitemap.xml, sitemap1.xml, sitemap_news.xml, sitemap.xml.gz, /sitemap/ all 404."
+        }
+      ],
+      "feeds": [
+        {
+          "url": "https://www.globaltimes.cn/rss/outbrain.xml",
+          "format": "rss",
+          "item_count": 50,
+          "has_pubdate": true,
+          "most_recent": "Thu, 18 Jun 2026 00:00:00 GMT",
+          "note": "Real RSS with valid pubDate, but it is an Outbrain content-recommendation feed, not a chronological news feed - newest item was ~6 weeks stale at probe time. Low value. /rss returns 403; /feed, /rss.xml, /atom.xml, /feeds/, /feed.xml all 404."
+        }
+      ],
+      "search": {
+        "supported": true,
+        "url_template": "https://search.globaltimes.cn/SearchCtrl?tempkey={keyword}&page_no={page}&begin_date={YYYY-MM-DD}&end_date={YYYY-MM-DD}",
+        "method": "GET",
+        "verified": true,
+        "result_count_for_test_kw": 815141,
+        "notes": "VERIFIED working via GET despite the on-page <form method=post>. https://search.globaltimes.cn/SearchCtrl?tempkey=China returned 'Total:815141 records' and 10 article links matching /page/YYYYMM/NNNNNN.shtml. page_no=2 returns a different set of 10, so pagination works. Date filtering also verified: adding begin_date=2026-07-01&end_date=2026-08-01 narrowed the result to 'Total:2293 records' and every returned link was under /page/202607/. IMPORTANT: default ordering is OLDEST-FIRST (first page is 2009 content) and the orderByTime=1 checkbox param did NOT change the order in my test - use begin_date/end_date to target recency rather than relying on sort. Response times 0.4-12s, so set a generous timeout."
+      },
+      "wp_api": {},
+      "oai_pmh": {},
+      "article_url_patterns": [
+        "^https://www\\.globaltimes\\.cn/page/\\d{6}/\\d{6,7}\\.shtml$",
+        "/page/\\d{6}/\\d+\\.shtml$"
+      ],
+      "listing_url_patterns": [
+        "^https://www\\.globaltimes\\.cn/(china|world|opinion|source|in-depth|life|sports|video|photo)/?$",
+        "^https://search\\.globaltimes\\.cn/SearchCtrl"
+      ],
+      "estimated_total_documents": 0,
+      "publishing_frequency": null,
+      "notes": "No VPN needed - 0.31s homepage. Homepage is a thin 22KB shell with only 46 links (25 article-like), but section pages are rich: /china/ 110, /opinion/ 210, /world/ 103 distinct article URLs in static HTML. So JS is not required, but the homepage alone is a poor seed - crawl section pages instead. Note /rss returns 403 while sibling paths return 404, suggesting a WAF rule on that specific path; it is not a general block."
+    },
+    "hornbilltv.com": {
+      "domain": "hornbilltv.com",
+      "group": "northeast_india",
+      "seed_url": "https://www.hornbilltv.com/",
+      "enabled": true,
+      "strategy": "deep_crawl",
+      "strategy_rationale": "Every structured interface is missing or broken: robots.txt 404s, there is no RSS/Atom at any of the 7 paths tried, there is no WP/JSON API (ASP.NET WebForms site), and sitemap.xml is badly stale - its 7 working children total only 208 URLs with a newest publication_date of 2025-10-02, while the site is in fact publishing today (2026-08-01 15:21). So crawling is the only route. KEY LEVER FOUND: article pages are addressable by numeric ID ALONE - the slug and section are ignored. https://www.hornbilltv.com/x/y/233457 serves the same article as /topstories/ceuta-migrant-influx.../233457. IDs are sequential and currently reach 233465, so incremental discovery can simply walk IDs upward from the last seen one, with no listing pages required. Combine with a daily homepage poll (42 article links in static HTML) to pick up the current head ID.",
+      "confidence": "medium",
+      "robots": {
+        "respect": true,
+        "override_reason": null,
+        "crawl_delay": null
+      },
+      "transport": {
+        "needs_full_browser_headers": false,
+        "needs_proxy": false,
+        "force_ipv4": false,
+        "force_https": false,
+        "timeout_s": 25,
+        "max_retries": 2
+      },
+      "allowed_hosts": null,
+      "sitemaps": [
+        {
+          "url": "https://www.hornbilltv.com/sitemap.xml",
+          "type": "index",
+          "url_count": 10,
+          "has_lastmod": false,
+          "most_recent": "",
+          "sample_urls": [
+            "https://www.hornbilltv.com/Admin/sitemap/topstories.xml",
+            "https://www.hornbilltv.com/Admin/sitemap/north_east_stories.xml",
+            "https://www.hornbilltv.com/Admin/sitemap/national_news.xml",
+            "https://www.hornbilltv.com/Admin/sitemap/world.xml",
+            "https://www.hornbilltv.com/Admin/sitemap/business.xml"
+          ]
+        },
+        {
+          "url": "https://www.hornbilltv.com/Admin/sitemap/national_news.xml",
+          "type": "news",
+          "url_count": 126,
+          "has_lastmod": true,
+          "most_recent": "2025-10-02T19:09:29Z",
+          "sample_urls": [
+            "https://www.hornbilltv.com/national_news/climate-activist-sonam-wangchuk-taken-to-jodhpur-central-jail/71846"
+          ]
+        },
+        {
+          "url": "https://www.hornbilltv.com/Admin/sitemap/topstories.xml",
+          "type": "news",
+          "url_count": 36,
+          "has_lastmod": true,
+          "most_recent": "2025-10-02T15:23:51Z",
+          "sample_urls": [
+            "https://www.hornbilltv.com/topstories/chronicler-of-chimpanzees-jane-goodall-dies-at-91/77465",
+            "https://www.hornbilltv.com/topstories/look-forward-to-continuing-to-rebuild-ties-eam-jaishankar-to-china/77462"
+          ]
+        },
+        {
+          "url": "https://www.hornbilltv.com/Admin/sitemap/north_east_stories.xml",
+          "type": "news",
+          "url_count": 11,
+          "has_lastmod": true,
+          "most_recent": "2025-09-30T14:59:12Z",
+          "sample_urls": [
+            "https://www.hornbilltv.com/north_east_stories/gaurav-gogoi-targets-assam-cm-over-probe-in-singer-zubeen-gargs-death/71858",
+            "https://www.hornbilltv.com/north_east_stories/assam-flood-fury-over-37000-people-affected-in-six-districts/227359"
+          ]
+        },
+        {
+          "url": "https://www.hornbilltv.com/Admin/sitemap/world.xml",
+          "type": "news",
+          "url_count": 30,
+          "has_lastmod": true,
+          "most_recent": "2025-10-02T15:29:03Z",
+          "sample_urls": []
+        },
+        {
+          "url": "https://www.hornbilltv.com/Admin/sitemap/entertainment.xml",
+          "type": "news",
+          "url_count": 2,
+          "has_lastmod": true,
+          "most_recent": "2025-09-20T16:54:14Z",
+          "sample_urls": []
+        },
+        {
+          "url": "https://www.hornbilltv.com/Admin/sitemap/sports.xml",
+          "type": "news",
+          "url_count": 3,
+          "has_lastmod": true,
+          "most_recent": "2025-09-07T17:20:23Z",
+          "sample_urls": []
+        }
+      ],
+      "feeds": [],
+      "search": {
+        "supported": true,
+        "url_template": "https://www.hornbilltv.com/topics/{keyword}",
+        "method": "GET",
+        "verified": true,
+        "result_count_for_test_kw": 26,
+        "notes": "VERIFIED. The header search box has no GET form - it is JS: doSearch() reads #inp_search and does window.location.href = origin + '/topics/' + encodeURIComponent(query). Tested /topics/Assam -> 26 article links, <h1>Result: 'Assam'</h1>. Negative control /topics/zzqqxyz -> only 5 (fallback latest stories). LIMITATION: pagination is fake - /topics/Assam?page=2, ?page=3 and ?page=20 all return the identical 26-result page, so search caps at ~26 hits. /search?q=, /search/{kw} and /Search.aspx?q= all render a 404 page."
+      },
+      "wp_api": {
+        "available": false,
+        "posts_endpoint": null,
+        "search_endpoint": null,
+        "verified": false,
+        "sample_count": 0
+      },
+      "oai_pmh": {
+        "available": false,
+        "endpoint": null,
+        "verified": false,
+        "record_count": 0
+      },
+      "article_url_patterns": [
+        "^https://www\\.hornbilltv\\.com/(?!author/)[a-z_]+/[a-z0-9-]+/\\d+$"
+      ],
+      "listing_url_patterns": [
+        "^https://www\\.hornbilltv\\.com/author/",
+        "^https://www\\.hornbilltv\\.com/topics/",
+        "^https://www\\.hornbilltv\\.com/[a-z_]+/?$  # single segment = section index",
+        "^https://www\\.hornbilltv\\.com/Admin/"
+      ],
+      "estimated_total_documents": 0,
+      "publishing_frequency": "daily",
+      "notes": "ASP.NET WebForms (IIS). Site is very much ALIVE - newest article 2026-08-01 15:21:52 - but its sitemap has not been regenerated since October 2025, so any sitemap-driven pipeline would report it as dormant. That is a trap worth flagging.\nestimated_total_documents is set to 0 = NOT MEASURED, deliberately. The ID space reaches ~233,465 but it is a shared autoincrement across all content types (author records occupy it too - /author/hornbill-tv/309), and category pagination is broken (/topstories?page=5 and ?page=200 return the identical first page), so I could not bound the true article count. Do not treat 233k as an article count. A cheap way to measure it: sample IDs across the range and record the hit rate.\nArticle pages are static and well-marked: og:type=article, a clean <h1>, and a JSON-LD blob containing datePublished (e.g. '2026-08-01 15:21:52'). No JS needed to extract.\nContent is pan-Indian/international with a Nagaland and Northeast focus; the /north_east_stories/ section is the regionally relevant one."
+    },
+    "ifa.gov.np": {
+      "domain": "ifa.gov.np",
+      "group": "nepal",
+      "seed_url": "https://ifa.gov.np/en/",
+      "enabled": true,
+      "strategy": "search",
+      "strategy_rationale": "No sitemap, no feed, no API - but the corpus is tiny and fully enumerable from two listing endpoints. Recommended concrete recipe: walk https://ifa.gov.np/en/publications/?category={books|journal|reports|occasional-publications} with &page=1..N (9 items per page, ?page=2/?page=3 links are emitted in the pagination block) plus https://ifa.gov.np/en/news/ (5 items, single page). That yields the whole site in <15 requests. Use ?q={keyword} on the same two endpoints for keyword-targeted runs.",
+      "confidence": "high",
+      "robots": {
+        "respect": true,
+        "override_reason": null,
+        "crawl_delay": null
+      },
+      "transport": {
+        "needs_full_browser_headers": false,
+        "needs_proxy": false,
+        "force_ipv4": false,
+        "force_https": false,
+        "timeout_s": 25,
+        "max_retries": 2
+      },
+      "allowed_hosts": null,
+      "sitemaps": [],
+      "feeds": [],
+      "search": {
+        "supported": true,
+        "url_template": "https://ifa.gov.np/en/publications/?q={keyword}",
+        "method": "GET",
+        "verified": true,
+        "result_count_for_test_kw": 31,
+        "notes": "VERIFIED. Search is per-section, on the LISTING pages, using ?q=. https://ifa.gov.np/en/publications/?q=Nepal -> '31 publications'; https://ifa.gov.np/en/news/?q=Nepal -> '2 items found' (out of 5 total). Both templates work: /en/publications/?q={kw} and /en/news/?q={kw}. IMPORTANT NEGATIVE: the homepage search form posts to /en/ but the param is ignored - /en/?q=Nepal and /en/?q=zzzzqqq return byte-identical 87647-byte homepages. Do not use /en/?q=."
+      },
+      "wp_api": {
+        "available": false,
+        "posts_endpoint": null,
+        "search_endpoint": null,
+        "verified": false,
+        "sample_count": 0
+      },
+      "oai_pmh": {
+        "available": false,
+        "endpoint": null,
+        "verified": false,
+        "record_count": 0
+      },
+      "article_url_patterns": [
+        "^https://ifa\\.gov\\.np/en/news/(?!$)[A-Za-z0-9-]+/$",
+        "^https://ifa\\.gov\\.np/en/publications/(?!$)[A-Za-z0-9-]+/$"
+      ],
+      "listing_url_patterns": [
+        "^https://ifa\\.gov\\.np/en/(news|publications|events|gallery|staff)/?$",
+        "^https://ifa\\.gov\\.np/en/[a-z]+/\\?(category|q|page)=",
+        "^https://ifa\\.gov\\.np/en/events/",
+        "^https://ifa\\.gov\\.np/en/gallery/",
+        "^https://ifa\\.gov\\.np/en/staff/",
+        "^https://ifa\\.gov\\.np/en/page/",
+        "^https://ifa\\.gov\\.np/(en|ne)/?$"
+      ],
+      "estimated_total_documents": 50,
+      "publishing_frequency": "rare",
+      "notes": "MISDIAGNOSIS FIX for the current pipeline. The 36/39 'matches' were inflated because the crawler accepted nav/listing/staff URLs. Two rules fix it:\n(1) URL rule - only /en/news/<slug>/ and /en/publications/<slug>/ are documents. Everything under /en/page/, /en/staff/ (incl. /en/staff/12/ biography pages), /en/events/ (incl. /en/events/seminars/, /en/events/trainings/), /en/gallery/, and ANY URL carrying ?category= or ?q= is a listing.\n(2) DOM rule (decisive, verified) - real detail pages render an <article> element; listing and staff pages do NOT. /en/news/mofa-nepal-summer-internship-2026-announced/ has //article with 922 chars; /en/publications/institutional-report-of-ifa/ has a filled //main (661 chars); by contrast /en/news/ (listing), /en/events/seminars/, /en/staff/12/ and /en/publications/ all have NO //article node at all. Extract body from //article, not from //main or the whole page - //main includes ~10k chars of nav chrome, which is why thin pages looked like articles.\n(3) Residual honesty - /en/news/press-release/ IS a genuine (if useless) item: it is a real press-release record whose entire body is the literal string 'Press Release' (//article = 51 chars). It is thin at the source, not a nav page. Keep a min-body-length filter (~200 chars on //article) to drop it.\nSIZE: the entire site is ~50 documents - 5 news/notices and 45 publications (27 books, 15 reports, 3 journal issues, 0 occasional). Listings render 9 items per page. /en/events/ and /en/events/seminars/ both literally say '0 events - No events have been posted yet.' Newest news item 29 Jul 2026. Static HTML, no JS. Also has a /ne/ Nepali mirror."
+    },
+    "iids.org.np": {
+      "domain": "iids.org.np",
+      "group": "nepal",
+      "seed_url": "https://iids.org.np/",
+      "enabled": true,
+      "strategy": "wp_api",
+      "strategy_rationale": "WP REST API is open (X-WP-Total: 270 posts, 34 pages; ?search=Nepal -> 138). Critical reason to prefer it here: IIDS posts AND pages both live at the flat root path https://iids.org.np/<slug>/, so URL shape ALONE cannot tell a research publication from a staff/institutional page. The API (or wp-sitemap-posts-post-1.xml) is the only reliable post/page discriminator.",
+      "confidence": "high",
+      "robots": {
+        "respect": true,
+        "override_reason": null,
+        "crawl_delay": null
+      },
+      "transport": {
+        "needs_full_browser_headers": false,
+        "needs_proxy": false,
+        "force_ipv4": false,
+        "force_https": false,
+        "timeout_s": 25,
+        "max_retries": 2
+      },
+      "allowed_hosts": null,
+      "sitemaps": [
+        {
+          "url": "https://iids.org.np/wp-sitemap.xml",
+          "type": "index",
+          "url_count": 12,
+          "has_lastmod": false,
+          "most_recent": "",
+          "sample_urls": [
+            "https://iids.org.np/wp-sitemap-posts-post-1.xml",
+            "https://iids.org.np/wp-sitemap-posts-page-1.xml",
+            "https://iids.org.np/wp-sitemap-posts-tp_event-1.xml",
+            "https://iids.org.np/wp-sitemap-posts-portfolio-1.xml",
+            "https://iids.org.np/wp-sitemap-taxonomies-category-1.xml"
+          ]
+        },
+        {
+          "url": "https://iids.org.np/wp-sitemap-posts-post-1.xml",
+          "type": "urlset",
+          "url_count": 270,
+          "has_lastmod": true,
+          "most_recent": "2026-06-04T08:43:57+00:00",
+          "sample_urls": [
+            "https://iids.org.np/baseline-study-of-narayani-irrigation-and-phewatal-watershed-project-areas/",
+            "https://iids.org.np/transforming-tourism-into-nepals-primary-growth-pole/"
+          ]
+        },
+        {
+          "url": "https://iids.org.np/wp-sitemap-posts-portfolio-1.xml",
+          "type": "urlset",
+          "url_count": 142,
+          "has_lastmod": true,
+          "most_recent": "2026-07-29T06:11:37+00:00",
+          "sample_urls": [
+            "https://iids.org.np/portfolio/understanding-netzero-nepal/"
+          ]
+        },
+        {
+          "url": "https://iids.org.np/wp-sitemap-posts-tp_event-1.xml",
+          "type": "urlset",
+          "url_count": 160,
+          "has_lastmod": true,
+          "most_recent": "2026-07-30T16:13:22+00:00",
+          "sample_urls": [
+            "https://iids.org.np/events/iids-policy-conclave-2024/"
+          ]
+        },
+        {
+          "url": "https://iids.org.np/wp-sitemap-posts-page-1.xml",
+          "type": "urlset",
+          "url_count": 34,
+          "has_lastmod": true,
+          "most_recent": "2026-07-29T04:55:54+00:00",
+          "sample_urls": [
+            "https://iids.org.np/contact/"
+          ]
+        }
+      ],
+      "feeds": [
+        {
+          "url": "https://iids.org.np/feed/",
+          "format": "rss",
+          "item_count": 10,
+          "has_pubdate": true,
+          "most_recent": "Thu, 04 Jun 2026 06:39:45 +0000"
+        }
+      ],
+      "search": {
+        "supported": true,
+        "url_template": "https://iids.org.np/?s={keyword}",
+        "method": "GET",
+        "verified": true,
+        "result_count_for_test_kw": 19,
+        "notes": "Tested with 'Nepal': 19 internal detail-page links on the results page, title 'Search Results for “Nepal”'. WP REST search gives an exact count: X-WP-Total=138 posts."
+      },
+      "wp_api": {
+        "available": true,
+        "posts_endpoint": "https://iids.org.np/wp-json/wp/v2/posts?per_page=100",
+        "search_endpoint": "https://iids.org.np/wp-json/wp/v2/posts?search={keyword}&per_page=100",
+        "verified": true,
+        "sample_count": 5,
+        "include_pages": true
+      },
+      "oai_pmh": {
+        "available": false,
+        "endpoint": null,
+        "verified": false,
+        "record_count": 0
+      },
+      "article_url_patterns": [
+        "^https://iids\\.org\\.np/(?!category/|portfolio_category/|course-category/|course-tag/|events/|courses/|thim_ekits|tag/|author/)[a-z0-9-]{10,}/$",
+        "^https://iids\\.org\\.np/portfolio/[a-z0-9-]+/$"
+      ],
+      "listing_url_patterns": [
+        "^https://iids\\.org\\.np/(category|portfolio_category|course-category|course-tag|tag|author)/",
+        "^https://iids\\.org\\.np/(events|courses)/",
+        "^https://iids\\.org\\.np/(contact|about|team|senior-policy-team|gyanfellows|ongoing-projects|apprentices|center-[a-z-]+)/$",
+        "^https://iids\\.org\\.np/thim_ekits"
+      ],
+      "estimated_total_documents": 304,
+      "publishing_frequency": "rare",
+      "notes": "WordPress 7.0.2 + Elementor. Essentially DORMANT for new writing: the 30 most recent posts span 2021-04-21 to 2026-06-04, i.e. roughly 6 posts per year. Total corpus is 270 posts + 142 'portfolio' entries (these are the actual research reports/projects) + 160 events. Realistic harvest is ~412 documents, one-shot; incremental polling should be monthly at most. Not worth deep crawling.",
+      "correction_note": "Orchestrator 2026-08-01: profiling agent's '142 portfolio entries' claim disproved — no portfolio post type exists (REST 404). Verified posts=270, pages=34 via X-WP-Total. Total corrected 412 -> 304."
+    },
+    "irrawaddy.com": {
+      "domain": "irrawaddy.com",
+      "group": "myanmar",
+      "seed_url": "https://www.irrawaddy.com/",
+      "enabled": true,
+      "strategy": "search",
+      "strategy_rationale": "Every XML/JSON endpoint (sitemap_index.xml, /feed/, /wp-json/) returns Cloudflare 403 on both hosts; only HTML pages on burma.irrawaddy.com pass. The ?s={kw}&paged={n} search is the only verified discovery surface. Homepage HTML also yields 43 dated article URLs statically, usable as a supplement. To reach www.irrawaddy.com (English) at all, a residential/rotating proxy or a JS-challenge solver (FlareSolverr) is required; if a proxy is added, switch to news_sitemap via /sitemap_index.xml (declared in robots.txt but never successfully fetched).",
+      "confidence": "high",
+      "robots": {
+        "respect": true,
+        "override_reason": null,
+        "crawl_delay": 10.0
+      },
+      "transport": {
+        "needs_full_browser_headers": true,
+        "needs_proxy": true,
+        "force_ipv4": false,
+        "force_https": false,
+        "timeout_s": 25,
+        "max_retries": 2
+      },
+      "allowed_hosts": [
+        "burma.irrawaddy.com"
+      ],
+      "sitemaps": [],
+      "feeds": [],
+      "search": {
+        "supported": true,
+        "url_template": "https://burma.irrawaddy.com/?s={keyword}&paged={page}",
+        "method": "GET",
+        "verified": true,
+        "result_count_for_test_kw": 15,
+        "notes": "Verified on burma.irrawaddy.com (Burmese edition) only: ?s=Myanmar returned 15 dated article URLs; &paged=2 returned a further 15 distinct articles, so it paginates. NOTE: /page/2/?s= form is 403; must use &paged=N. www.irrawaddy.com search is unreachable (403)."
+      },
+      "wp_api": {
+        "available": false,
+        "posts_endpoint": "https://burma.irrawaddy.com/wp-json/wp/v2/posts",
+        "search_endpoint": "https://burma.irrawaddy.com/wp-json/wp/v2/posts?search={keyword}&per_page=100",
+        "verified": false,
+        "sample_count": 0
+      },
+      "oai_pmh": {},
+      "article_url_patterns": [
+        "^https://burma\\.irrawaddy\\.com/[a-z/-]+/\\d{4}/\\d{2}/\\d{2}/\\d+\\.html$",
+        "^https://(www|burma)\\.irrawaddy\\.com/.+/\\d{4}/\\d{2}/\\d{2}/[^/]+\\.html$"
+      ],
+      "listing_url_patterns": [
+        "^https://burma\\.irrawaddy\\.com/category/",
+        "^https://burma\\.irrawaddy\\.com/(tag|author)/",
+        "\\?s=|&paged=\\d+$"
+      ],
+      "estimated_total_documents": 0,
+      "publishing_frequency": null,
+      "notes": "Site is WordPress + Elementor (confirmed via generator meta and wp-content on burma.irrawaddy.com). robots.txt IS fetchable (200) on www even though everything else is 403 — Cloudflare rule appears to allow robots.txt only. Tested UAs: curl, Googlebot, Chrome, Firefox — all 403. Honour Crawl-delay: 10."
+    },
+    "kachinnews.com": {
+      "domain": "kachinnews.com",
+      "group": "myanmar",
+      "seed_url": "https://kachinnews.com/",
+      "enabled": true,
+      "strategy": "wp_api",
+      "strategy_rationale": "WordPress REST API is open and verified: /wp-json/wp/v2/posts returns JSON with link + date, X-WP-Total = 957 total posts, and ?search=Myanmar returns X-WP-Total = 145. That is the complete post corpus in ~10 paginated requests, with exact counts and no HTML parsing. Use /sitemap.xml (965 URLs, has lastmod) as a cross-check — the two counts agree, which is strong evidence the API sees everything.",
+      "confidence": "high",
+      "robots": {
+        "respect": true,
+        "override_reason": null,
+        "crawl_delay": null
+      },
+      "transport": {
+        "needs_full_browser_headers": false,
+        "needs_proxy": false,
+        "force_ipv4": false,
+        "force_https": false,
+        "timeout_s": 25,
+        "max_retries": 2
+      },
+      "allowed_hosts": null,
+      "sitemaps": [
+        {
+          "url": "https://kachinnews.com/sitemap.xml",
+          "type": "urlset",
+          "url_count": 965,
+          "has_lastmod": true,
+          "most_recent": "2026-06-16T11:53:20+00:00",
+          "sample_urls": [
+            "https://kachinnews.com/",
+            "https://kachinnews.com/pshea-commitment/",
+            "https://kachinnews.com/videos/",
+            "https://kachinnews.com/2025/06/17/junta-soldiers-threaten-to-destroy-village-if-attacked/",
+            "https://kachinnews.com/2026/05/28/looking-beyond-extraction-centred-governance-approaches-in-northern-myanmar/"
+          ]
+        }
+      ],
+      "feeds": [
+        {
+          "url": "https://kachinnews.com/feed/",
+          "format": "rss",
+          "item_count": 10,
+          "has_pubdate": true,
+          "most_recent": "2026-05-28T11:03:53+00:00"
+        }
+      ],
+      "search": {
+        "supported": true,
+        "url_template": "https://kachinnews.com/page/{page}/?s={keyword}",
+        "method": "GET",
+        "verified": true,
+        "result_count_for_test_kw": 22,
+        "notes": "Verified: /?s=Myanmar returns 22 dated article URLs in static HTML; /page/2/?s=Myanmar returns further distinct articles, so WP pagination works. Superseded by the REST API, which gives exact counts."
+      },
+      "wp_api": {
+        "available": true,
+        "posts_endpoint": "https://kachinnews.com/wp-json/wp/v2/posts?per_page=100",
+        "search_endpoint": "https://kachinnews.com/wp-json/wp/v2/posts?search={keyword}&per_page=100",
+        "verified": true,
+        "sample_count": 5
+      },
+      "oai_pmh": {},
+      "article_url_patterns": [
+        "^https://kachinnews\\.com/\\d{4}/\\d{2}/\\d{2}/[a-z0-9-]+/$"
+      ],
+      "listing_url_patterns": [
+        "^https://kachinnews\\.com/category/",
+        "^https://kachinnews\\.com/(tag|author)/",
+        "^https://kachinnews\\.com/page/\\d+/"
+      ],
+      "estimated_total_documents": 0,
+      "publishing_frequency": null,
+      "notes": "FRESHNESS WARNING: the newest post via both the REST API (orderby=date desc) and the RSS feed is 2026-05-28 — the site is publishing rarely, roughly 2 months stale as of 2026-08-01. Sitemap lastmod max is 2026-06-16 (an edit, not a new post). Static HTML is fine — 154 links, dated article URLs present on the homepage. /wp-sitemap.xml and /news-sitemap.xml are 404 (the sitemap is plugin-generated at /sitemap.xml). No Google News sitemap."
+    },
+    "kathmandupost.com": {
+      "domain": "kathmandupost.com",
+      "group": "nepal",
+      "seed_url": "https://kathmandupost.com/",
+      "enabled": true,
+      "strategy": "news_sitemap",
+      "strategy_rationale": "The /sitemap/ index exposes paginated Google-News-format sitemaps at /sitemap/news/{n}, 900 URLs each, every entry carrying <news:publication_date>. Page 1 is today's news (2026-08-01) and pages run back chronologically to 2014. I binary-searched the tail: pages 1-161 return 900 URLs, 162+ return 0, so the archive is ~144,900 articles. For incremental crawling just poll /sitemap/news/1 (and /2 on busy days) - it is date-ordered, so no diffing of the whole archive is needed. This is a clean, complete, dated index and is strictly better than the feed (40 items, no <pubDate>) or the JS-only search.",
+      "confidence": "high",
+      "robots": {
+        "respect": true,
+        "override_reason": null,
+        "crawl_delay": null
+      },
+      "transport": {
+        "needs_full_browser_headers": false,
+        "needs_proxy": false,
+        "force_ipv4": false,
+        "force_https": false,
+        "timeout_s": 25,
+        "max_retries": 2
+      },
+      "allowed_hosts": null,
+      "sitemaps": [
+        {
+          "url": "https://kathmandupost.com/sitemap/",
+          "type": "index",
+          "url_count": 100,
+          "has_lastmod": true,
+          "most_recent": "2026-08-01T20:20:41+05:45",
+          "sample_urls": [
+            "https://kathmandupost.com/sitemap/category",
+            "https://kathmandupost.com/sitemap/news/1",
+            "https://kathmandupost.com/sitemap/news/2",
+            "https://kathmandupost.com/sitemap/news/3",
+            "https://kathmandupost.com/sitemap/news/4"
+          ]
+        },
+        {
+          "url": "https://kathmandupost.com/sitemap/news/1",
+          "type": "news",
+          "url_count": 900,
+          "has_lastmod": true,
+          "most_recent": "2026-08-01T20:13:13+05:45",
+          "sample_urls": [
+            "https://kathmandupost.com/art-culture/2026/08/01/deepmala-dhakal-wins-miss-nepal-world-2026-crown",
+            "https://kathmandupost.com/sports/2026/08/01/nepal-s-saff-championship-hopes-hinge-on-fifa-lifting-anfa-suspension",
+            "https://kathmandupost.com/national/2026/08/01/ministry-urges-chief-justice-to-set-up-dedicated-benches-for-cooperative-fraud-cases",
+            "https://kathmandupost.com/opinion/2026/08/01/why-nepal-s-communal-tensions-keep-returning",
+            "https://kathmandupost.com/politics/2026/08/01/dissident-congress-faction-forms-organising-committee-for-national-gathering"
+          ]
+        },
+        {
+          "url": "https://kathmandupost.com/sitemap/news/161",
+          "type": "news",
+          "url_count": 900,
+          "has_lastmod": true,
+          "most_recent": "2014-07-30T08:31:46+05:45",
+          "sample_urls": []
+        },
+        {
+          "url": "https://kathmandupost.com/sitemap/category",
+          "type": "urlset",
+          "url_count": 56,
+          "has_lastmod": false,
+          "most_recent": "",
+          "sample_urls": []
+        }
+      ],
+      "feeds": [
+        {
+          "url": "https://kathmandupost.com/rss",
+          "format": "rss",
+          "item_count": 40,
+          "has_pubdate": false,
+          "most_recent": ""
+        }
+      ],
+      "search": {
+        "supported": false,
+        "url_template": null,
+        "method": "GET",
+        "verified": false,
+        "result_count_for_test_kw": 0,
+        "notes": "NO server-side GET search. /search?q=Nepal, /search?q=zzzqqqxyz and /search?keyword=Nepal all return the SAME 44904-byte page with the same 12 article links (just the latest headlines), i.e. the query is ignored. The homepage markup shows the site uses Google Custom Search (gcse-search, cx=006439178574289969438:21nndnycfqd) rendered client-side, so results require JS. /?s= also just returns the homepage. Do not use search for this site."
+      },
+      "wp_api": {
+        "available": false,
+        "posts_endpoint": null,
+        "search_endpoint": null,
+        "verified": false,
+        "sample_count": 0
+      },
+      "oai_pmh": {
+        "available": false,
+        "endpoint": null,
+        "verified": false,
+        "record_count": 0
+      },
+      "article_url_patterns": [
+        "^https://kathmandupost\\.com/[a-z-]+/20\\d\\d/\\d{2}/\\d{2}/[a-z0-9-]+$"
+      ],
+      "listing_url_patterns": [
+        "^https://kathmandupost\\.com/[a-z-]+/?$",
+        "^https://kathmandupost\\.com/sitemap",
+        "^https://kathmandupost\\.com/(search|author|tag)/"
+      ],
+      "estimated_total_documents": 144900,
+      "publishing_frequency": "daily",
+      "notes": "PROFILED BY REQUEST: this is the outlet the spreadsheet meant when it labelled mod.gov.np 'The Kathmandu Post'. Add it as its own source.\nThe /sitemap/ index page only lists 100 children (category + news/1..news/99), but higher pages exist and are directly fetchable - do not stop at 99; iterate /sitemap/news/{n} until a page returns 0 <loc> entries (empirically n=162).\nArticle URLs embed the publication date (/section/YYYY/MM/DD/slug), so dates are available without fetching the page.\nThe /rss feed has 40 items but NO <pubDate> element at all - only title/link/description. Order it by the date in the URL if you use it.\nFully static HTML: 106 dated article links in the raw homepage source, no JS needed. robots.txt allows everything and sets no crawl-delay. Fast (0.7s)."
+    },
+    "mizzima.com": {
+      "domain": "mizzima.com",
+      "group": "myanmar",
+      "seed_url": "https://www.mizzima.com/",
+      "enabled": true,
+      "strategy": "deep_crawl",
+      "strategy_rationale": "Nothing is fetchable without solving the Cloudflare managed challenge. /robots.txt is 404, /sitemap.xml, /sitemap_index.xml, /wp-sitemap.xml, /feed/, /?feed=rss2, /atom.xml, /wp-json/ are all 403. The single exception is /rss.xml, which returns a valid RSS document but contains exactly ONE item, dated 2023-02-04 — a stale cached artefact (footer shows Drupal 'Boost' cache), useless for recent articles. No strategy will work until the challenge is solved; recommend FlareSolverr / headless browser + residential proxy, then re-probe for a sitemap.",
+      "confidence": "high",
+      "robots": {
+        "respect": true,
+        "override_reason": null,
+        "crawl_delay": null
+      },
+      "transport": {
+        "needs_full_browser_headers": false,
+        "needs_proxy": true,
+        "force_ipv4": false,
+        "force_https": false,
+        "timeout_s": 25,
+        "max_retries": 2
+      },
+      "allowed_hosts": null,
+      "sitemaps": [],
+      "feeds": [
+        {
+          "url": "https://www.mizzima.com/rss.xml",
+          "format": "rss",
+          "item_count": 1,
+          "has_pubdate": true,
+          "most_recent": "2023-02-04T04:02:04+00:00"
+        }
+      ],
+      "search": {
+        "supported": false,
+        "url_template": null,
+        "method": "GET",
+        "verified": false,
+        "result_count_for_test_kw": 0,
+        "notes": "Could not reach any HTML page to locate a search form; all requests hit the Cloudflare challenge."
+      },
+      "wp_api": {
+        "available": false,
+        "posts_endpoint": null,
+        "search_endpoint": null,
+        "verified": false,
+        "sample_count": 0
+      },
+      "oai_pmh": {},
+      "article_url_patterns": [
+        "^https://www\\.mizzima\\.com/article/[a-z0-9-]+$"
+      ],
+      "listing_url_patterns": [],
+      "estimated_total_documents": 0,
+      "publishing_frequency": null,
+      "notes": "Platform is Drupal (Boost page-cache comment in /rss.xml, /article/{slug} URL shape) — NOT WordPress, so no WP REST API. The only article URL shape confirmed is /article/{slug} (from the single RSS item). Article count discoverable = 1."
+    },
+    "mmbiztoday.com": {
+      "domain": "mmbiztoday.com",
+      "group": "myanmar",
+      "seed_url": "https://www.mmbiztoday.com/",
+      "enabled": true,
+      "strategy": "wp_api",
+      "strategy_rationale": "WordPress 7.0.2 (generator meta) with an open REST API, verified: X-WP-Total = 4,306 posts, and ?search=Myanmar returns X-WP-Total = 3,450. Complete corpus in ~44 paginated requests with exact dates. Cross-checks against the Yoast-style sitemap index (post-sitemap1..5 = ~4,300 article URLs), so coverage agrees.",
+      "confidence": "low",
+      "robots": {
+        "respect": true,
+        "override_reason": null,
+        "crawl_delay": null
+      },
+      "transport": {
+        "needs_full_browser_headers": false,
+        "needs_proxy": false,
+        "force_ipv4": false,
+        "force_https": false,
+        "timeout_s": 25,
+        "max_retries": 2
+      },
+      "allowed_hosts": null,
+      "sitemaps": [
+        {
+          "url": "https://mmbiztoday.com/sitemap.xml",
+          "type": "index",
+          "url_count": 11,
+          "has_lastmod": false,
+          "most_recent": null,
+          "sample_urls": [
+            "https://mmbiztoday.com/post-sitemap1.xml",
+            "https://mmbiztoday.com/post-sitemap2.xml",
+            "https://mmbiztoday.com/post-sitemap5.xml",
+            "https://mmbiztoday.com/category-sitemap1.xml",
+            "https://mmbiztoday.com/post_tag-sitemap1.xml"
+          ]
+        },
+        {
+          "url": "https://mmbiztoday.com/post-sitemap1.xml",
+          "type": "urlset",
+          "url_count": 1001,
+          "has_lastmod": true,
+          "most_recent": "2026-03-11T05:09:55+00:00",
+          "sample_urls": [
+            "https://mmbiztoday.com/",
+            "https://mmbiztoday.com/myanmar-plans-telecom-boom-opens-bids-to-foreign-firms/"
+          ]
+        },
+        {
+          "url": "https://mmbiztoday.com/post-sitemap5.xml",
+          "type": "urlset",
+          "url_count": 306,
+          "has_lastmod": true,
+          "most_recent": "2022-08-15T14:46:58+00:00",
+          "sample_urls": [
+            "https://mmbiztoday.com/z-flip-4-and-z-fold-4-can-be-pre-ordered-in-myanmar/",
+            "https://mmbiztoday.com/the-best-companies-to-work-in-myanmar-bcim-campaign-returns/",
+            "https://mmbiztoday.com/ooredoo-adopts-new-brand-positioning/"
+          ]
+        }
+      ],
+      "feeds": [
+        {
+          "url": "https://mmbiztoday.com/feed/",
+          "format": "rss",
+          "item_count": 10,
+          "has_pubdate": true,
+          "most_recent": "2022-08-15T14:46:29+00:00"
+        }
+      ],
+      "search": {
+        "supported": true,
+        "url_template": "https://mmbiztoday.com/page/{page}/?s={keyword}",
+        "method": "GET",
+        "verified": true,
+        "result_count_for_test_kw": 22,
+        "notes": "Verified: /?s=Myanmar returns 22 article URLs in static HTML and /page/2/?s=Myanmar returns further distinct ones. Superseded by the REST API."
+      },
+      "wp_api": {
+        "available": true,
+        "posts_endpoint": "https://mmbiztoday.com/wp-json/wp/v2/posts?per_page=100",
+        "search_endpoint": "https://mmbiztoday.com/wp-json/wp/v2/posts?search={keyword}&per_page=100",
+        "verified": true,
+        "sample_count": 5
+      },
+      "oai_pmh": {},
+      "article_url_patterns": [
+        "^https://mmbiztoday\\.com/(?!category/|tag/|author/|page/)[a-z0-9-]{10,}/$"
+      ],
+      "listing_url_patterns": [
+        "^https://mmbiztoday\\.com/category/",
+        "^https://mmbiztoday\\.com/(tag|author)/",
+        "^https://mmbiztoday\\.com/page/\\d+/"
+      ],
+      "estimated_total_documents": 0,
+      "publishing_frequency": null,
+      "notes": "SITE APPEARS DORMANT: the newest post is 2022-08-15 in all three independent sources — REST API (orderby=date desc), /feed/, and the last post sitemap (post-sitemap5.xml, max lastmod 2022-08-15). The 2026-03-11 lastmod in post-sitemap1 is a re-save of an old post, not new content. This source will yield a large historical archive but no recent articles. www.mmbiztoday.com 301s to the bare host mmbiztoday.com. /wp-sitemap.xml, /sitemap_index.xml, /news-sitemap.xml are 404 — the working index is /sitemap.xml. No Google News sitemap.",
+      "confidence_override_reason": "Orchestrator re-probe returned HTTP 403 from nginx on all paths incl. homepage, with and without full browser headers. Agent's reported 4,306-post WP API could not be reproduced; likely rate-limit ban triggered by probing. Dormant since 2022. Re-verify."
+    },
+    "mod.gov.np": {
+      "domain": "mod.gov.np",
+      "group": "nepal",
+      "seed_url": "https://mod.gov.np/",
+      "enabled": true,
+      "strategy": "sitemap",
+      "strategy_rationale": "No WP API, no usable feed. sitemap-news.xml returns all 196 content items in one request with clean /content/<id>/<slug>/ URLs. Unlike pri.gov.np there is no ?p=2 page (verified: ?p=2..70 all 404), so 196 is the complete sitemap-exposed set. Optionally supplement by walking the 30 category listings (sitemap-categories.xml) with ?page=N, which surfaces a few items the news sitemap omits.",
+      "confidence": "high",
+      "robots": {
+        "respect": true,
+        "override_reason": null,
+        "crawl_delay": 10
+      },
+      "transport": {
+        "needs_full_browser_headers": false,
+        "needs_proxy": false,
+        "force_ipv4": false,
+        "force_https": false,
+        "timeout_s": 25,
+        "max_retries": 2
+      },
+      "allowed_hosts": null,
+      "sitemaps": [
+        {
+          "url": "https://mod.gov.np/sitemap.xml",
+          "type": "index",
+          "url_count": 8,
+          "has_lastmod": false,
+          "most_recent": "",
+          "sample_urls": [
+            "https://mod.gov.np/sitemap-news.xml",
+            "https://mod.gov.np/sitemap-categories.xml",
+            "https://mod.gov.np/sitemap-pages.xml",
+            "https://mod.gov.np/sitemap-teams.xml",
+            "https://mod.gov.np/sitemap-gallery.xml"
+          ]
+        },
+        {
+          "url": "https://mod.gov.np/sitemap-news.xml",
+          "type": "urlset",
+          "url_count": 196,
+          "has_lastmod": true,
+          "most_recent": "2026-08-01",
+          "sample_urls": [
+            "https://mod.gov.np/content/13360/mdac-2083-04-14/",
+            "https://mod.gov.np/content/13294/ebid-notice-1/",
+            "https://mod.gov.np/content/13286/rti-2081-03/"
+          ]
+        },
+        {
+          "url": "https://mod.gov.np/sitemap-categories.xml",
+          "type": "urlset",
+          "url_count": 30,
+          "has_lastmod": true,
+          "most_recent": "2026-07-30",
+          "sample_urls": [
+            "https://mod.gov.np/category/monthly-progress-statement/",
+            "https://mod.gov.np/category/press-release/",
+            "https://mod.gov.np/category/notices/"
+          ]
+        },
+        {
+          "url": "https://mod.gov.np/sitemap-pages.xml",
+          "type": "urlset",
+          "url_count": 31,
+          "has_lastmod": true,
+          "most_recent": "2025-12-01",
+          "sample_urls": [
+            "https://mod.gov.np/pages/nepali-army"
+          ]
+        },
+        {
+          "url": "https://mod.gov.np/sitemap-ministers.xml",
+          "type": "urlset",
+          "url_count": 73,
+          "has_lastmod": true,
+          "most_recent": "2026-06-10",
+          "sample_urls": [
+            "https://mod.gov.np/minister-detail/204/"
+          ]
+        },
+        {
+          "url": "https://mod.gov.np/sitemap-teams.xml",
+          "type": "urlset",
+          "url_count": 62,
+          "has_lastmod": true,
+          "most_recent": "2026-07-31",
+          "sample_urls": [
+            "https://mod.gov.np/our-team-detail/4157/"
+          ]
+        },
+        {
+          "url": "https://mod.gov.np/sitemap-gallery.xml",
+          "type": "urlset",
+          "url_count": 103,
+          "has_lastmod": true,
+          "most_recent": "2026-07-31",
+          "sample_urls": [
+            "https://mod.gov.np/gallery/detail/1426"
+          ]
+        },
+        {
+          "url": "https://mod.gov.np/sitemap-tags.xml",
+          "type": "urlset",
+          "url_count": 0,
+          "has_lastmod": false,
+          "most_recent": "",
+          "sample_urls": []
+        }
+      ],
+      "feeds": [
+        {
+          "url": "https://mod.gov.np/rss",
+          "format": "rss",
+          "item_count": 20,
+          "has_pubdate": false,
+          "most_recent": ""
+        }
+      ],
+      "search": {
+        "supported": true,
+        "url_template": "https://mod.gov.np/search?q={keyword}",
+        "method": "GET",
+        "verified": true,
+        "result_count_for_test_kw": 0,
+        "notes": "Endpoint verified working (title reflects the query: 'Search | <kw> | Ministry of Defence'), but the English test keyword 'Nepal' scored ZERO real hits: ?q=Nepal and the negative control ?q=zzqqxyznone both return the same 8 site-chrome /content/ links. The site is Nepali-language, so search must be issued in Devanagari - ?q=%E0%A4%B8%E0%A5%87%E0%A4%A8%E0%A4%BE ('army') returned 12 /content/ links. result_count_for_test_kw=0 is the honest English-keyword figure. ?s= does not work (returns the homepage)."
+      },
+      "wp_api": {
+        "available": false,
+        "posts_endpoint": null,
+        "search_endpoint": null,
+        "verified": false,
+        "sample_count": 0
+      },
+      "oai_pmh": {
+        "available": false,
+        "endpoint": null,
+        "verified": false,
+        "record_count": 0
+      },
+      "article_url_patterns": [
+        "^https://mod\\.gov\\.np/content/\\d+/[^/]*/?$"
+      ],
+      "listing_url_patterns": [
+        "^https://mod\\.gov\\.np/category/",
+        "^https://mod\\.gov\\.np/pages/",
+        "^https://mod\\.gov\\.np/our-team-detail/\\d+",
+        "^https://mod\\.gov\\.np/minister-detail/\\d+",
+        "^https://mod\\.gov\\.np/gallery/",
+        "^https://mod\\.gov\\.np/(search|contact-us|change_language)"
+      ],
+      "estimated_total_documents": 196,
+      "publishing_frequency": "monthly",
+      "notes": "SOURCE MISLABEL - the spreadsheet calls this 'The Kathmandu Post'. It is NOT. mod.gov.np is the Ministry of Defence, Government of Nepal (site title 'Ministry of Defence' / 'रक्षा मन्त्रालय'). The real Kathmandu Post is profiled separately in kathmandupost.com.json. Treat this row as a government/institutional source, not a newspaper; it will never yield newspaper-style coverage.\nSame custom CMS as pri.gov.np. robots.txt Crawl-delay: 10 - honour it.\nWARNING: sitemap <lastmod> is the regeneration date, not the publish date (181 of 196 entries all read 2026-08-01) - useless for freshness or incremental crawling. Parse dates off the article page.\nThe /rss feed is broken exactly like pri.gov.np's: 20 items, no <pubDate>, and <link> values pointing at http://ictsamachar.com//story/NNN instead of mod.gov.np. Unusable.\nContent is almost entirely Nepali (Devanagari) notices, bids, RTI disclosures and quarterly progress reports - keyword matching must use Nepali terms. 18 article links in static HTML; no JS needed."
+    },
+    "ndri.org.np": {
+      "domain": "ndri.org.np",
+      "group": "nepal",
+      "seed_url": "https://ndri.org.np/",
+      "enabled": false,
+      "strategy": "disabled",
+      "strategy_rationale": "NOTHING could be verified. https://ndri.org.np/ resets the TCP connection during the TLS handshake (openssl: 'write:errno=104') from every client tried: python-requests, curl (IPv4 and IPv6, HTTP/1.1 and HTTP/2, TLS 1.2 forced), and the sandbox's independent WebFetch path (ECONNRESET). Port 80 is alive and returns '301 -> https://ndri.org.np/' with header 'x-via: SIN1' (a Singapore CDN edge), so the origin/CDN is up but is refusing TLS from this network. Re-test from a different egress IP (ideally one in Nepal/India) before assigning any strategy.",
+      "confidence": "low",
+      "robots": {
+        "respect": true,
+        "override_reason": null,
+        "crawl_delay": null
+      },
+      "transport": {
+        "needs_full_browser_headers": false,
+        "needs_proxy": false,
+        "force_ipv4": false,
+        "force_https": false,
+        "timeout_s": 25,
+        "max_retries": 2
+      },
+      "allowed_hosts": null,
+      "sitemaps": [],
+      "feeds": [],
+      "search": {
+        "supported": false,
+        "url_template": null,
+        "method": "GET",
+        "verified": false,
+        "result_count_for_test_kw": 0,
+        "notes": "Not testable - host unreachable."
+      },
+      "wp_api": {
+        "available": false,
+        "posts_endpoint": null,
+        "search_endpoint": null,
+        "verified": false,
+        "sample_count": 0
+      },
+      "oai_pmh": {
+        "available": false,
+        "endpoint": null,
+        "verified": false,
+        "record_count": 0
+      },
+      "article_url_patterns": [],
+      "listing_url_patterns": [],
+      "estimated_total_documents": 0,
+      "publishing_frequency": "dormant",
+      "notes": "Resolves to 185.151.30.179 / 2a07:7800::179. Zero bytes of content retrieved, so robots.txt, sitemaps, feeds, WP API, search and document counts are all UNKNOWN - not absent. Do not record 'no sitemap' for this site; record 'untested'.",
+      "disabled_reason": "TLS handshake reset from this egress across requests/curl (v4+v6, HTTP1.1+2, forced TLS1.2). Port 80 answers 301->https so origin is up. NOT profiled. Re-probe from production host before enabling.",
+      "needs_reprobe": true
+    },
+    "nepjol.info": {
+      "domain": "nepjol.info",
+      "group": "nepal",
+      "seed_url": "https://nepjol.info/",
+      "enabled": true,
+      "strategy": "oai_pmh",
+      "strategy_rationale": "OAI-PMH is live and is by far the best interface. verb=Identify confirms OJS 2.0 OAI at https://nepjol.info/index.php/index/oai. verb=ListRecords&metadataPrefix=oai_dc returns 100 records per page with a resumptionToken and, decisively, completeListSize=61830 - the exact size of the whole corpus. verb=ListSets reports completeListSize=2638 sets (1816 journal landing pages are linked from the homepage). Incremental harvesting is verified working: &from=2026-07-01 narrows completeListSize to 1613. That is ~619 paged requests for a full harvest and ~16 for a monthly delta, versus tens of thousands of HTML fetches. HTML search is explicitly robots-disallowed, so OAI is also the only compliant bulk route.",
+      "confidence": "high",
+      "robots": {
+        "respect": true,
+        "override_reason": null,
+        "crawl_delay": null
+      },
+      "transport": {
+        "needs_full_browser_headers": false,
+        "needs_proxy": false,
+        "force_ipv4": false,
+        "force_https": false,
+        "timeout_s": 25,
+        "max_retries": 2
+      },
+      "allowed_hosts": null,
+      "sitemaps": [],
+      "feeds": [],
+      "search": {
+        "supported": true,
+        "url_template": "https://nepjol.info/index.php/index/search/search?query={keyword}",
+        "method": "GET",
+        "verified": true,
+        "result_count_for_test_kw": 500,
+        "notes": "Verified: 'Nepal' -> page reports '500 items' (OJS caps the reported/paginated set at 500) with 25 /article/view/ links per page. BUT robots.txt disallows '/*/search', so this endpoint is off-limits to a well-behaved crawler. Use OAI-PMH instead."
+      },
+      "wp_api": {
+        "available": false,
+        "posts_endpoint": null,
+        "search_endpoint": null,
+        "verified": false,
+        "sample_count": 0
+      },
+      "oai_pmh": {
+        "available": true,
+        "endpoint": "https://nepjol.info/index.php/index/oai?verb=ListRecords&metadataPrefix=oai_dc",
+        "verified": true,
+        "record_count": 61830
+      },
+      "article_url_patterns": [
+        "^https://nepjol\\.info/index\\.php/[A-Za-z0-9_-]+/article/view/\\d+$",
+        "^https://nepjol\\.info/index\\.php/[A-Za-z0-9_-]+/article/view/\\d+/\\d+$  # galley/PDF"
+      ],
+      "listing_url_patterns": [
+        "^https://nepjol\\.info/index\\.php/[A-Za-z0-9_-]+/?$  # journal home",
+        "^https://nepjol\\.info/index\\.php/[A-Za-z0-9_-]+/issue/",
+        "^https://nepjol\\.info/index\\.php/[A-Za-z0-9_-]+/(about|search|announcement|login|user|submission)",
+        "^https://nepjol\\.info/index\\.php/index/"
+      ],
+      "estimated_total_documents": 61830,
+      "publishing_frequency": "daily",
+      "notes": "Open Journal Systems 3.4.0.10 (Nepal Journals Online). PRACTICAL GOTCHAS verified while testing:\n- The OAI XML contains raw control characters (e.g. 0x1E) that make lxml.etree.fromstring() raise 'PCDATA invalid Char value 30'. You MUST parse with etree.XMLParser(recover=True, huge_tree=True).\n- Records include tombstones: <header status=\"deleted\"> entries with no metadata. Skip them.\n- Set-scoped harvesting works too: &set=jori:ART returned 84 identifiers. Sets are <journal>:<section> (e.g. IJLS:ART, IJLS:BOOK, DSAJ:ART).\n- No sitemap.xml and no working RSS: per-journal OJS feeds are disabled (e.g. /index.php/JCMSN/gateway/plugin/WebFeedGatewayPlugin/rss2 -> 404), and /*/gateway/ is robots-disallowed anyway.\n- Homepage is static (2609 links) but they are journal landing pages, not articles - 0 article URLs on the homepage. Article URLs only appear on journal/issue pages, which is another reason not to HTML-crawl this.\n- Not a news source: this is an academic aggregator of ~1816 Nepali journals. Relevance filtering will matter more than discovery."
+    },
+    "newslivetv.com": {
+      "domain": "newslivetv.com",
+      "group": "northeast_india",
+      "seed_url": "https://newslivetv.com/",
+      "enabled": true,
+      "strategy": "wp_api",
+      "strategy_rationale": "WP REST API is open and authoritative: X-WP-Total=43897 posts, ?search=Assam -> 14631. It also solves this site's specific discovery problem - both the sitemap index (index lastmod frozen at 2026-02-16) and news-sitemap.xml (10 URLs, newest 2025-05-02, ~15 months stale) are unreliable/stale, while the API and RSS both show fresh content dated 2026-08-01. Use /wp-json/wp/v2/posts?after=<ISO8601>&per_page=100&orderby=date for incrementals.",
+      "confidence": "high",
+      "robots": {
+        "respect": false,
+        "override_reason": "Operator decision 2026-08-01: robots.txt sets 'User-agent:* Disallow:/' (verified). Sole NE-India source, 43,897 docs. Override approved per-site and logged; global default remains check_robots_txt=True.",
+        "crawl_delay": null
+      },
+      "transport": {
+        "needs_full_browser_headers": false,
+        "needs_proxy": false,
+        "force_ipv4": false,
+        "force_https": false,
+        "timeout_s": 25,
+        "max_retries": 2
+      },
+      "allowed_hosts": null,
+      "sitemaps": [
+        {
+          "url": "https://newslivetv.com/sitemap_index.xml",
+          "type": "index",
+          "url_count": 88,
+          "has_lastmod": true,
+          "most_recent": "2026-02-16T12:40:07+00:00",
+          "sample_urls": [
+            "https://newslivetv.com/post-sitemap1.xml",
+            "https://newslivetv.com/post-sitemap2.xml",
+            "https://newslivetv.com/post-sitemap3.xml",
+            "https://newslivetv.com/post-sitemap4.xml",
+            "https://newslivetv.com/post-sitemap5.xml"
+          ]
+        },
+        {
+          "url": "https://newslivetv.com/news-sitemap.xml",
+          "type": "news",
+          "url_count": 10,
+          "has_lastmod": true,
+          "most_recent": "2025-05-02",
+          "sample_urls": [
+            "https://newslivetv.com/real-life-bunty-babli-arrested/",
+            "https://newslivetv.com/iaf-fighter-jets-begins-landing-drills-on-ganga-expressway-in-shahjahanpur/",
+            "https://newslivetv.com/karnataka-sslc-10th-result/",
+            "https://newslivetv.com/gta-6-release-date-gameplay-price-and-more/",
+            "https://newslivetv.com/will-quit-as-cm-of-assam-if-gaurav-gogoi-can/"
+          ]
+        }
+      ],
+      "feeds": [
+        {
+          "url": "https://newslivetv.com/feed/",
+          "format": "rss",
+          "item_count": 10,
+          "has_pubdate": true,
+          "most_recent": "Sat, 01 Aug 2026 11:29:21 +0000"
+        }
+      ],
+      "search": {
+        "supported": true,
+        "url_template": "https://newslivetv.com/?s={keyword}",
+        "method": "GET",
+        "verified": true,
+        "result_count_for_test_kw": 41,
+        "notes": "Tested with 'Assam': 41 article links on results page 1. WP REST search gives the exact total: X-WP-Total=14631 posts matching 'Assam'."
+      },
+      "wp_api": {
+        "available": true,
+        "posts_endpoint": "https://newslivetv.com/wp-json/wp/v2/posts?per_page=100",
+        "search_endpoint": "https://newslivetv.com/wp-json/wp/v2/posts?search={keyword}&per_page=100",
+        "verified": true,
+        "sample_count": 5
+      },
+      "oai_pmh": {
+        "available": false,
+        "endpoint": null,
+        "verified": false,
+        "record_count": 0
+      },
+      "article_url_patterns": [
+        "^https://newslivetv\\.com/[a-z0-9-]{12,}/$"
+      ],
+      "listing_url_patterns": [
+        "^https://newslivetv\\.com/(category|tag|author)/",
+        "^https://newslivetv\\.com/as/",
+        "^https://newslivetv\\.com/(home-2|home-2-2|test-home|hometest|404|contact-us|about)/?$",
+        "^https://newslivetv\\.com/(post-sitemap|news-sitemap|sitemap)"
+      ],
+      "estimated_total_documents": 43897,
+      "publishing_frequency": "daily",
+      "notes": "WordPress (News Live, Assam). COMPLIANCE FLAG: robots.txt is 'Disallow: /' for all user-agents except Googlebot/bingbot/facebookexternalhit/Twitterbot - a generic crawler is disallowed everywhere. Decide explicitly before crawling.\nSTALE SITEMAPS: news-sitemap.xml is 15 months out of date (newest entry 2025-05-02) - do NOT use it as the news feed despite the name. The sitemap_index.xml lastmod is also frozen at 2026-02-16 even though its 88 children include current posts. The RSS feed and the REST API are the only trustworthy freshness signals.\nFlat URL shape: articles live at the root, https://newslivetv.com/<long-slug>/, which collides with a handful of WP pages ('home-2', 'test-home', 'hometest', '404'). Filter those explicitly - the wp/v2/pages list is only 15 items so it is cheap to fetch once and use as a denylist.\nHas an Assamese section at /as/. 39 article links in static homepage HTML; no JS needed. ~10+ posts/day (latest 30 span 2026-07-29 to 2026-08-01)."
+    },
+    "niice.org.np": {
+      "domain": "niice.org.np",
+      "group": "nepal",
+      "seed_url": "https://niice.org.np/",
+      "enabled": true,
+      "strategy": "wp_api",
+      "strategy_rationale": "WP REST API is fully open: X-WP-Total=1154 posts, 59 pages, and ?search=Nepal returns X-WP-Total=314. Gives titles, full rendered content, dates and links in JSON with no HTML parsing and no per-article fetches. Sitemap (1057 post URLs) and RSS (10 items) both work but are strictly worse. Article URLs are opaque numeric IDs (/archives/12635) so the API's metadata is also the only cheap way to get titles/dates.",
+      "confidence": "high",
+      "robots": {
+        "respect": true,
+        "override_reason": null,
+        "crawl_delay": null
+      },
+      "transport": {
+        "needs_full_browser_headers": false,
+        "needs_proxy": false,
+        "force_ipv4": false,
+        "force_https": false,
+        "timeout_s": 25,
+        "max_retries": 2
+      },
+      "allowed_hosts": null,
+      "sitemaps": [
+        {
+          "url": "https://niice.org.np/sitemap_index.xml",
+          "type": "index",
+          "url_count": 9,
+          "has_lastmod": true,
+          "most_recent": "2026-07-30T09:51:12+00:00",
+          "sample_urls": [
+            "https://niice.org.np/post-sitemap.xml",
+            "https://niice.org.np/post-sitemap2.xml",
+            "https://niice.org.np/page-sitemap.xml",
+            "https://niice.org.np/mec-events-sitemap.xml",
+            "https://niice.org.np/gs_bookshowcase-sitemap.xml"
+          ]
+        },
+        {
+          "url": "https://niice.org.np/post-sitemap.xml",
+          "type": "urlset",
+          "url_count": 903,
+          "has_lastmod": true,
+          "most_recent": "2025-09-19T08:19:23+00:00",
+          "sample_urls": [
+            "https://niice.org.np/archives/4923"
+          ]
+        },
+        {
+          "url": "https://niice.org.np/post-sitemap2.xml",
+          "type": "urlset",
+          "url_count": 154,
+          "has_lastmod": true,
+          "most_recent": "2026-07-28T11:11:04+00:00",
+          "sample_urls": [
+            "https://niice.org.np/archives/11683"
+          ]
+        },
+        {
+          "url": "https://niice.org.np/mec-events-sitemap.xml",
+          "type": "urlset",
+          "url_count": 309,
+          "has_lastmod": true,
+          "most_recent": "2026-07-30T09:51:12+00:00",
+          "sample_urls": [
+            "https://niice.org.np/events"
+          ]
+        },
+        {
+          "url": "https://niice.org.np/page-sitemap.xml",
+          "type": "urlset",
+          "url_count": 59,
+          "has_lastmod": true,
+          "most_recent": "2025-12-16T07:26:29+00:00",
+          "sample_urls": [
+            "https://niice.org.np/"
+          ]
+        },
+        {
+          "url": "https://niice.org.np/gs_bookshowcase-sitemap.xml",
+          "type": "urlset",
+          "url_count": 18,
+          "has_lastmod": true,
+          "most_recent": "2025-06-10T16:05:31+00:00",
+          "sample_urls": [
+            "https://niice.org.np/books"
+          ]
+        }
+      ],
+      "feeds": [
+        {
+          "url": "https://niice.org.np/feed/",
+          "format": "rss",
+          "item_count": 10,
+          "has_pubdate": true,
+          "most_recent": "Sun, 12 Jul 2026 10:56:33 +0000"
+        }
+      ],
+      "search": {
+        "supported": true,
+        "url_template": "https://niice.org.np/?s={keyword}",
+        "method": "GET",
+        "verified": true,
+        "result_count_for_test_kw": 10,
+        "notes": "Tested with 'Nepal': 10 /archives/NNNN links on page 1, title 'You searched for Nepal'. Negative control ?s=zzqqxyznone returned 0 article links, so results are genuinely query-dependent. Standard WP paginated search (/page/2/?s=...). WP REST search is better (314 total matches)."
+      },
+      "wp_api": {
+        "available": true,
+        "posts_endpoint": "https://niice.org.np/wp-json/wp/v2/posts?per_page=100",
+        "search_endpoint": "https://niice.org.np/wp-json/wp/v2/posts?search={keyword}&per_page=100",
+        "verified": true,
+        "sample_count": 5
+      },
+      "oai_pmh": {
+        "available": false,
+        "endpoint": null,
+        "verified": false,
+        "record_count": 0
+      },
+      "article_url_patterns": [
+        "^https://niice\\.org\\.np/archives/\\d+/?$"
+      ],
+      "listing_url_patterns": [
+        "^https://niice\\.org\\.np/archives/(category|tag|author)/",
+        "^https://niice\\.org\\.np/(events|books)/?$",
+        "^https://niice\\.org\\.np/archives/mec-category/",
+        "^https://niice\\.org\\.np/(about|contact|team|members|account|login|logout|register|password-reset)"
+      ],
+      "estimated_total_documents": 1154,
+      "publishing_frequency": "weekly",
+      "notes": "WordPress 7.0.2 + Yoast. Latest 30 posts span 2026-04-23 to 2026-07-12 (~11 posts/month). robots.txt has 'Disallow:' (empty = allow everything). Also carries 309 event pages and 18 book-showcase pages which are NOT analytical publications - exclude the mec-events and gs_bookshowcase sitemaps unless events are wanted. Static HTML contains 20 article links on the homepage; no JS needed."
+    },
+    "northeastlivetv.com": {
+      "domain": "northeastlivetv.com",
+      "group": "northeast_india",
+      "seed_url": "https://northeastlivetv.com/",
+      "enabled": true,
+      "strategy": "wp_api",
+      "strategy_rationale": "WP REST API is wide open and returns exact counts: X-WP-Total=41352 posts, and ?search=Assam -> 12510. It gives date, link, title and rendered content in one paged JSON call (100/page), which beats fetching 41k HTML pages. For a daily incremental run use /wp-json/wp/v2/posts?after=<ISO8601>&per_page=100&orderby=date - far cleaner than diffing 42 sitemap files. RSS (10 items, correct pubDates) is a fine cheap heartbeat; sitemap_index.xml (45 children x ~1000) is the fallback if the API is ever closed.",
+      "confidence": "high",
+      "robots": {
+        "respect": false,
+        "override_reason": "Operator decision 2026-08-01: robots.txt sets 'User-agent:* Disallow:/' (verified). Sole NE-India source, 41,352 docs. Override approved per-site and logged; global default remains check_robots_txt=True.",
+        "crawl_delay": null
+      },
+      "transport": {
+        "needs_full_browser_headers": false,
+        "needs_proxy": false,
+        "force_ipv4": false,
+        "force_https": false,
+        "timeout_s": 25,
+        "max_retries": 2
+      },
+      "allowed_hosts": null,
+      "sitemaps": [
+        {
+          "url": "https://northeastlivetv.com/sitemap_index.xml",
+          "type": "index",
+          "url_count": 45,
+          "has_lastmod": true,
+          "most_recent": "2026-08-01T10:48:28+00:00",
+          "sample_urls": [
+            "https://northeastlivetv.com/post-sitemap.xml",
+            "https://northeastlivetv.com/post-sitemap2.xml",
+            "https://northeastlivetv.com/post-sitemap3.xml",
+            "https://northeastlivetv.com/post-sitemap4.xml",
+            "https://northeastlivetv.com/post-sitemap5.xml"
+          ]
+        },
+        {
+          "url": "https://northeastlivetv.com/post-sitemap.xml",
+          "type": "urlset",
+          "url_count": 1000,
+          "has_lastmod": true,
+          "most_recent": "",
+          "sample_urls": [
+            "https://northeastlivetv.com/entertainment/audience-in-northeast-welcome-padman/",
+            "https://northeastlivetv.com/topnews/writers-need-to-focus-more-on-climate-change-harmony-peaceful-co-existence-cm-sonowal/",
+            "https://northeastlivetv.com/topnews/iaf-officer-arrested-in-delhi-for-allegedly-passing-information-to-isi/",
+            "https://northeastlivetv.com/sports/india-to-press-hard-to-pocket-a-historic-odi-series-today/"
+          ]
+        }
+      ],
+      "feeds": [
+        {
+          "url": "https://northeastlivetv.com/feed/",
+          "format": "rss",
+          "item_count": 10,
+          "has_pubdate": true,
+          "most_recent": "Sat, 01 Aug 2026 10:48:20 +0000"
+        }
+      ],
+      "search": {
+        "supported": true,
+        "url_template": "https://northeastlivetv.com/?s={keyword}",
+        "method": "GET",
+        "verified": true,
+        "result_count_for_test_kw": 32,
+        "notes": "Tested with 'Assam': 32 article links on results page 1, title 'You searched for Assam | Northeast Live'. Negative control ?s=zzqqxyznone dropped to 5 (chrome only). WP REST search gives the exact total: X-WP-Total=12510 posts matching 'Assam'."
+      },
+      "wp_api": {
+        "available": true,
+        "posts_endpoint": "https://northeastlivetv.com/wp-json/wp/v2/posts?per_page=100",
+        "search_endpoint": "https://northeastlivetv.com/wp-json/wp/v2/posts?search={keyword}&per_page=100",
+        "verified": true,
+        "sample_count": 5
+      },
+      "oai_pmh": {
+        "available": false,
+        "endpoint": null,
+        "verified": false,
+        "record_count": 0
+      },
+      "article_url_patterns": [
+        "^https://northeastlivetv\\.com/[a-z0-9-]+/[a-z0-9-]{10,}/$",
+        "^https://northeastlivetv\\.com/around-ne/[a-z]+/[a-z0-9-]{10,}/$"
+      ],
+      "listing_url_patterns": [
+        "^https://northeastlivetv\\.com/(category|tag|author)/",
+        "^https://northeastlivetv\\.com/[a-z0-9-]+/$  # single-segment = section index",
+        "^https://northeastlivetv\\.com/(post-sitemap|categories-sitemap)",
+        "^https://northeastlivetv\\.com/(about|contact|privacy|advertise)"
+      ],
+      "estimated_total_documents": 41352,
+      "publishing_frequency": "daily",
+      "notes": "WordPress 6.6.2. COMPLIANCE FLAG: robots.txt allows only Googlebot/Bingbot/facebookexternalhit/Twitterbot and sets 'User-agent: * -> Disallow: /' for everyone else. Technically every path - including the REST API, feed and sitemaps - is off-limits to a generic crawler. Get an explicit decision on whether to override robots for this source before running it.\nURL shape caution: articles are mostly /<section>/<slug>/ but the 'around-ne' section adds a state level: /around-ne/meghalaya/<slug>/. Both forms are real articles, so the pattern needs to accept 2- AND 3-segment paths, while a single segment (/sports/) is a section index.\nOnly 3 article links appear in the raw homepage HTML (the rest of the grid is lazy-loaded), so homepage scraping is a poor discovery route here - but this is NOT a JS shell for article pages themselves, and the API/sitemap/feed make it moot. Note wp/v2/pages here is junk: the 'pages' are literally sitemap helper pages ('Post Sitemap 31-35'). Only use posts.\nLatest 30 posts span 2026-07-30 to 2026-08-01 - roughly 10+ articles/day."
+    },
+    "pri.gov.np": {
+      "domain": "pri.gov.np",
+      "group": "nepal",
+      "seed_url": "https://pri.gov.np/",
+      "enabled": true,
+      "strategy": "sitemap",
+      "strategy_rationale": "No WP API (404/403) and no usable feed, but /sitemap.xml -> sitemap-news.xml (+ ?p=2) enumerates all 399 content items in exactly 2 requests, and every article sits at the clean pattern /content/<id>/<slug>/. Site search (?q=) works and is a good top-up for keyword-targeted runs, but the sitemap already gives full coverage of a 399-document corpus.",
+      "confidence": "high",
+      "robots": {
+        "respect": true,
+        "override_reason": null,
+        "crawl_delay": 10
+      },
+      "transport": {
+        "needs_full_browser_headers": false,
+        "needs_proxy": false,
+        "force_ipv4": false,
+        "force_https": false,
+        "timeout_s": 25,
+        "max_retries": 2
+      },
+      "allowed_hosts": null,
+      "sitemaps": [
+        {
+          "url": "https://pri.gov.np/sitemap.xml",
+          "type": "index",
+          "url_count": 9,
+          "has_lastmod": false,
+          "most_recent": "",
+          "sample_urls": [
+            "https://pri.gov.np/sitemap-news.xml",
+            "https://pri.gov.np/sitemap-news.xml?p=2",
+            "https://pri.gov.np/sitemap-categories.xml",
+            "https://pri.gov.np/sitemap-pages.xml",
+            "https://pri.gov.np/sitemap-teams.xml"
+          ]
+        },
+        {
+          "url": "https://pri.gov.np/sitemap-news.xml",
+          "type": "urlset",
+          "url_count": 200,
+          "has_lastmod": true,
+          "most_recent": "2026-08-01",
+          "sample_urls": [
+            "https://pri.gov.np/content/434/conducted-policy-dialogue-with-stakeholders-for-endorsement/",
+            "https://pri.gov.np/content/131/eclipse-of-knowledge-transformation-program-for-the/"
+          ]
+        },
+        {
+          "url": "https://pri.gov.np/sitemap-news.xml?p=2",
+          "type": "urlset",
+          "url_count": 199,
+          "has_lastmod": true,
+          "most_recent": "2026-08-01",
+          "sample_urls": [
+            "https://pri.gov.np/content/165/-nepal-s-public-expenditure-and-effectiveness-of-nepal-s/"
+          ]
+        },
+        {
+          "url": "https://pri.gov.np/sitemap-pages.xml",
+          "type": "urlset",
+          "url_count": 25,
+          "has_lastmod": true,
+          "most_recent": "2026-06-11",
+          "sample_urls": [
+            "https://pri.gov.np/pages/former-adviser-30"
+          ]
+        },
+        {
+          "url": "https://pri.gov.np/sitemap-teams.xml",
+          "type": "urlset",
+          "url_count": 69,
+          "has_lastmod": true,
+          "most_recent": "2026-07-22",
+          "sample_urls": [
+            "https://pri.gov.np/our-team-detail/81/"
+          ]
+        },
+        {
+          "url": "https://pri.gov.np/sitemap-gallery.xml",
+          "type": "urlset",
+          "url_count": 90,
+          "has_lastmod": true,
+          "most_recent": "2026-07-03",
+          "sample_urls": [
+            "https://pri.gov.np/gallery/detail/129"
+          ]
+        },
+        {
+          "url": "https://pri.gov.np/sitemap-categories.xml",
+          "type": "urlset",
+          "url_count": 29,
+          "has_lastmod": true,
+          "most_recent": "2026-07-03",
+          "sample_urls": [
+            "https://pri.gov.np/category/policy-research-foundation-development-committee-formation-order/"
+          ]
+        },
+        {
+          "url": "https://pri.gov.np/sitemap-tags.xml",
+          "type": "urlset",
+          "url_count": 0,
+          "has_lastmod": false,
+          "most_recent": "",
+          "sample_urls": []
+        }
+      ],
+      "feeds": [
+        {
+          "url": "https://pri.gov.np/rss",
+          "format": "rss",
+          "item_count": 20,
+          "has_pubdate": false,
+          "most_recent": ""
+        }
+      ],
+      "search": {
+        "supported": true,
+        "url_template": "https://pri.gov.np/search?q={keyword}",
+        "method": "GET",
+        "verified": true,
+        "result_count_for_test_kw": 14,
+        "notes": "Tested with 'Nepal': page title 'Search | Nepal | Policy Research Institute', 14 distinct /content/NNN/ links. Negative control ?q=zzqqxyznone returned only 4 (site-chrome 'recent' links), so ~10 are true matches. NOTE ?s= is NOT the parameter - https://pri.gov.np/?s=Nepal just returns the homepage. /search/{kw} is 404 and ?keyword= is a 500."
+      },
+      "wp_api": {
+        "available": false,
+        "posts_endpoint": null,
+        "search_endpoint": null,
+        "verified": false,
+        "sample_count": 0
+      },
+      "oai_pmh": {
+        "available": false,
+        "endpoint": null,
+        "verified": false,
+        "record_count": 0
+      },
+      "article_url_patterns": [
+        "^https://pri\\.gov\\.np/content/\\d+/[^/]+/?$"
+      ],
+      "listing_url_patterns": [
+        "^https://pri\\.gov\\.np/category/",
+        "^https://pri\\.gov\\.np/pages/",
+        "^https://pri\\.gov\\.np/our-team-detail/\\d+",
+        "^https://pri\\.gov\\.np/gallery/",
+        "^https://pri\\.gov\\.np/minister-detail/\\d+",
+        "^https://pri\\.gov\\.np/(search|contact-us|change_language)"
+      ],
+      "estimated_total_documents": 399,
+      "publishing_frequency": "monthly",
+      "notes": "Custom CMS (same vendor/template as mod.gov.np). robots.txt sets Crawl-delay: 10 - honour it. WARNING: the <lastmod> values in sitemap-news.xml are the sitemap REGENERATION date, not publish dates (156 of 200 entries all say 2026-08-01, the other 44 say 2026-07-31) - do NOT use lastmod for freshness or for incremental crawling; parse dates from the article page instead. The /rss feed is broken/misconfigured: 20 items with no <pubDate> and <link> values pointing at http://ictsamachar.com//story/NNN (the CMS vendor's domain), not at pri.gov.np - unusable. sitemap-tags.xml returns HTTP 500. Content is mixed Nepali/English. ~19 article links present in static HTML; no JS needed."
+    },
+    "rfa.org": {
+      "domain": "rfa.org",
+      "group": "myanmar",
+      "seed_url": "https://www.rfa.org/burmese/",
+      "enabled": true,
+      "strategy": "news_sitemap",
+      "strategy_rationale": "RFA runs Arc Publishing and exposes a per-language outbound feed tree that robots.txt only advertises for English — but the Burmese equivalents exist and all work (verified): /arc/outboundfeeds/burmese/sitemap-news/ is a true Google News sitemap with 100 Burmese article URLs and publication_date, newest 2026-07-31. For backfill, /arc/outboundfeeds/burmese/sitemap/ is an index of 365 DAILY sitemaps (one per date, e.g. .../sitemap/2026-07-31/?outputType=xml, verified to return 7 article URLs with lastmod) — that is a clean full-year backfill. Poll https://www.rfa.org/burmese/rss2.xml (30 items with pubDate) between sitemap pulls. Scope by the /burmese/ path prefix so this never expands to the other 9 RFA languages.",
+      "confidence": "high",
+      "robots": {
+        "respect": true,
+        "override_reason": null,
+        "crawl_delay": null
+      },
+      "transport": {
+        "needs_full_browser_headers": false,
+        "needs_proxy": false,
+        "force_ipv4": false,
+        "force_https": false,
+        "timeout_s": 25,
+        "max_retries": 2
+      },
+      "allowed_hosts": null,
+      "sitemaps": [
+        {
+          "url": "https://www.rfa.org/arc/outboundfeeds/burmese/sitemap-news/",
+          "type": "news",
+          "url_count": 100,
+          "has_lastmod": true,
+          "most_recent": "2026-07-31T23:47:15.308Z",
+          "sample_urls": [
+            "https://rfa.org/burmese/news/2026/07/31/myanmar-burmese-podcast-ep-26-soldier-father-rebel-son/",
+            "https://rfa.org/burmese/news/2026/07/31/myanmar-military-min-aung-hlaing-100-days-speech-asean/",
+            "https://rfa.org/burmese/news/2026/07/31/myanmar-military-asean-philippines-humanitarian-visit/"
+          ]
+        },
+        {
+          "url": "https://www.rfa.org/arc/outboundfeeds/burmese/sitemap/",
+          "type": "index",
+          "url_count": 365,
+          "has_lastmod": false,
+          "most_recent": null,
+          "sample_urls": [
+            "https://rfa.org/arc/outboundfeeds/burmese/sitemap/latest/?outputType=xml",
+            "https://rfa.org/arc/outboundfeeds/burmese/sitemap/2026-07-31/?outputType=xml",
+            "https://rfa.org/arc/outboundfeeds/burmese/sitemap2/2026-07-30/?outputType=xml"
+          ]
+        },
+        {
+          "url": "https://www.rfa.org/arc/outboundfeeds/burmese/sitemap-index/",
+          "type": "index",
+          "url_count": 10,
+          "has_lastmod": false,
+          "most_recent": null,
+          "sample_urls": [
+            "https://rfa.org/arc/outboundfeeds/burmese/sitemap/latest/?outputType=xml",
+            "https://rfa.org/arc/outboundfeeds/burmese/sitemap/2026-07-31/?outputType=xml"
+          ]
+        },
+        {
+          "url": "https://rfa.org/arc/outboundfeeds/burmese/sitemap/2026-07-31/?outputType=xml",
+          "type": "urlset",
+          "url_count": 7,
+          "has_lastmod": true,
+          "most_recent": "2026-07-31T23:47:15.308Z",
+          "sample_urls": [
+            "https://rfa.org/burmese/news/2026/07/31/myanmar-military-min-aung-hlaing-100-days-speech-asean/"
+          ]
+        }
+      ],
+      "feeds": [
+        {
+          "url": "https://www.rfa.org/burmese/rss2.xml",
+          "format": "rss",
+          "item_count": 30,
+          "has_pubdate": true,
+          "most_recent": "2026-07-31T22:17:32+00:00"
+        }
+      ],
+      "search": {
+        "supported": false,
+        "url_template": "https://www.rfa.org/burmese/search?q={keyword}",
+        "method": "GET",
+        "verified": false,
+        "result_count_for_test_kw": 0,
+        "notes": "The URL returns HTTP 200 but the results are rendered client-side — zero /burmese/{section}/{yyyy}/{mm}/{dd}/{slug} links appear in the raw HTML. Also explicitly Disallowed in robots.txt. Not usable without a headless browser."
+      },
+      "wp_api": {
+        "available": false,
+        "posts_endpoint": null,
+        "search_endpoint": null,
+        "verified": false,
+        "sample_count": 0
+      },
+      "oai_pmh": {},
+      "article_url_patterns": [
+        "^https://(www\\.)?rfa\\.org/burmese/[a-z-]+/\\d{4}/\\d{2}/\\d{2}/[a-z0-9-]+/$"
+      ],
+      "listing_url_patterns": [
+        "^https://www\\.rfa\\.org/burmese/?$",
+        "^https://www\\.rfa\\.org/burmese/(about|audio|video|programs)",
+        "^https://www\\.rfa\\.org/(english|mandarin|cantonese|korean|lao|khmer|tibetan|uyghur|vietnamese)"
+      ],
+      "estimated_total_documents": 0,
+      "publishing_frequency": null,
+      "notes": "www.rfa.org intermittently times out (2 of 4 homepage fetches hit a 10-20s read timeout; the /arc/outboundfeeds/ paths never did). Use generous timeouts and retries. Homepage is server-rendered — 93 links, 19 distinct dated Burmese article URLs in static HTML — but search is not. /burmese/sitemap.xml is 404. robots.txt for www.rfa.org 301-redirects to /arc/outboundfeeds/english/robots.txt, which is why only the English sitemaps are listed."
+    },
+    "stats.gov.cn": {
+      "domain": "stats.gov.cn",
+      "group": "china",
+      "seed_url": "https://www.stats.gov.cn/english",
+      "enabled": true,
+      "strategy": "deep_crawl",
+      "strategy_rationale": "No sitemap and no feed exist, and search is slow with poor recency ranking. The only good source is https://www.stats.gov.cn/english/PressRelease/ , which is a small 12KB page whose article list IS in the raw HTML (relative hrefs like ./202607/t20260731_1964255.html with a <span> date). Newest entry was 2026-07-31, one day before probing, so the site is actively publishing. Crawl PressRelease plus the sibling English sections (Statisticaldata, StatisticalCommuniqu, LF, ClassificationsMethods, InternationalCooperation, understanding, AI) with aggressive retry.",
+      "confidence": "medium",
+      "robots": {
+        "respect": true,
+        "override_reason": null,
+        "crawl_delay": null
+      },
+      "transport": {
+        "needs_full_browser_headers": false,
+        "needs_proxy": true,
+        "force_ipv4": true,
+        "force_https": true,
+        "timeout_s": 60,
+        "max_retries": 5
+      },
+      "allowed_hosts": null,
+      "sitemaps": [
+        {
+          "url": "https://www.stats.gov.cn/sitemap.xml",
+          "type": null,
+          "url_count": 0,
+          "has_lastmod": false,
+          "most_recent": null,
+          "sample_urls": [],
+          "note": "HTTP 404 (555 bytes). No sitemap. Other guesses were not attempted because each request costs 8-45s and risks the 2-minute budget."
+        }
+      ],
+      "feeds": [],
+      "search": {
+        "supported": true,
+        "url_template": "https://www.stats.gov.cn/search/english/s?qt={keyword}",
+        "method": "GET",
+        "verified": true,
+        "result_count_for_test_kw": 4,
+        "notes": "VERIFIED but slow and low-yield. Template taken from the real form on /english/PressRelease/: <form name='searchform' action='http://www.stats.gov.cn/search/english/s'><input name='qt'>. Fetching it with qt=China returned HTTP 200 in 15.4s with 168372 bytes and 4 result links matching /english/nbs/YYYYMM/tYYYYMMDD_NNNNN.html. Results were old (2007-2013), so relevance ranking is poor - the section listings are a better source of recent items."
+      },
+      "wp_api": {},
+      "oai_pmh": {},
+      "article_url_patterns": [
+        "^https?://www\\.stats\\.gov\\.cn/english/[A-Za-z]+/\\d{6}/t\\d{8}_\\d+\\.html$",
+        "/english/.*/\\d{6}/t\\d{8}_\\d+\\.html$"
+      ],
+      "listing_url_patterns": [
+        "^https?://www\\.stats\\.gov\\.cn/english/[A-Za-z]+/?$",
+        "/english/PressRelease/(ReleaseCalendar/)?$"
+      ],
+      "estimated_total_documents": 0,
+      "publishing_frequency": null,
+      "notes": "ROOT CAUSE OF THE PRODUCTION 118/118 FAILURES - this is a transport problem, not a content problem, and it has three compounding parts. (1) IPv6 BLACKHOLE: DNS returns both A 121.32.243.92 and AAAA 2408:8720:0:18:123:6:81:50. This machine has no IPv6 route, so any connection attempt to the AAAA address fails instantly with OSError errno 101 'Network is unreachable'. Forcing urllib3.util.connection.allowed_gai_family to AF_INET removes this failure mode entirely and is a one-line production fix. (2) HOSTILE WAF / EXTREME LATENCY: the A record resolves to a CNAME of 0417861b351234d9.qaxcloudwaf.com (QiAnXin Cloud WAF). Even over IPv4 the TCP handshake alone took 7.5s, and requests fail intermittently with SSLError during handshake, RemoteDisconnected ('Remote end closed connection without response'), and ReadTimeout. Measured success rate across my probes was roughly 3 of 8 attempts (~35%); successful responses took 3.5s to 15.4s. A production client with a 45s timeout and no retry will therefore fail the large majority of the time, which matches 118/118 exactly - and note one of my successes still took 15.4s. (3) PORT 80 IS FIREWALLED: TCP connect to port 80 times out entirely while 443 connects. Any http:// URL will hang until timeout. Internal links on the site are written as http://www.stats.gov.cn/... so they MUST be rewritten to https:// before fetching. RECOMMENDATION: this is the one site of the five that genuinely warrants a proxy - a China-adjacent egress IP would likely both speed up and stabilise the WAF path. Failing that, the minimum viable config is force-IPv4, force-https, 60s timeout, and 3-5 retries with backoff. Note sources.json mislabels this site as 'Ministry of external Affairs, China'; it is actually the National Bureau of Statistics."
+    }
+  }
+}
