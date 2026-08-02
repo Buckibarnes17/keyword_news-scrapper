@@ -62,6 +62,42 @@ try:
 except ImportError:
     SELENIUM_AVAILABLE = False
 
+# Module-level cache for the resolved chromedriver binary path.
+# ChromeDriverManager().install() takes its OWN filesystem lock
+# (~/.wdm/.wdm-lock-chromedriver-linux64) to guard its driver cache directory.
+# Previously every Crawler instance called it independently (guarded only by
+# a per-instance threading.Lock, which does nothing across instances), so
+# many concurrent Crawler instances all serialized on that filesystem lock —
+# observed to push individual fetches past the pipeline's 120s watchdog.
+# Resolving the path once per process and caching it here means the
+# filesystem lock is touched at most once per process lifetime.
+_CHROMEDRIVER_PATH: Optional[str] = None
+_CHROMEDRIVER_PATH_LOCK = threading.Lock()
+
+
+def _get_chromedriver_path() -> str:
+    """Resolves and caches the chromedriver binary path once per process.
+
+    Uses double-checked locking: the fast path (already resolved) never
+    touches the lock, and a thread that does wait re-checks the cache after
+    acquiring it in case another thread just finished resolving it. A failed
+    resolution is intentionally NOT cached, so a transient error (e.g. a
+    network failure downloading the driver) can be retried by a later call
+    instead of poisoning the cache for the rest of the process's life.
+    """
+    global _CHROMEDRIVER_PATH
+    if _CHROMEDRIVER_PATH is not None:
+        return _CHROMEDRIVER_PATH
+
+    with _CHROMEDRIVER_PATH_LOCK:
+        if _CHROMEDRIVER_PATH is None:
+            driver_path = ChromeDriverManager().install()
+            # Apply local binary patching to replace cdc_ automation signatures.
+            patch_chromedriver_if_needed(driver_path)
+            _CHROMEDRIVER_PATH = driver_path
+
+    return _CHROMEDRIVER_PATH
+
 # Try importing Playwright for Lightpanda integration (CDP path)
 try:
     from playwright.sync_api import sync_playwright
@@ -252,11 +288,11 @@ class Crawler:
                 chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
                 chrome_options.add_experimental_option('useAutomationExtension', False)
                 
-                # Use webdriver-manager to get driver path automatically
-                driver_path = ChromeDriverManager().install()
-                # Apply local binary patching to replace cdc_ automation signatures on the fly
-                patch_chromedriver_if_needed(driver_path)
-                
+                # Resolve the chromedriver binary path once per process (module-level
+                # cache + lock) instead of once per Crawler instance — see
+                # _get_chromedriver_path() for why this must not be per-instance.
+                driver_path = _get_chromedriver_path()
+
                 service = Service(driver_path)
                 self._driver = webdriver.Chrome(service=service, options=chrome_options)
                 self._driver.set_page_load_timeout(30)
