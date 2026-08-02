@@ -190,6 +190,108 @@ def patch_chromedriver_if_needed(driver_path: str):
     except Exception as e:
         print(f"[Stealth Warning] Failed to patch chromedriver: {e}")
 
+# ── Punctuation-insensitive substring matching helpers ──────────────────────
+# Shared by _analyze_page_impl's count_occurrences() (below) and by
+# backend/queue_manager.py's re-test-already-crawled-content path (see
+# match_keyword_against_stored_content()). Kept module-level (not nested
+# inside _analyze_page_impl) specifically so queue_manager.py can import and
+# reuse the exact same matching semantics without duplicating them - a URL's
+# stored content should match "kw" identically whether it's being analyzed
+# fresh from raw HTML or re-tested against already-extracted text.
+_DASH_CHARS_RE = re.compile(r"[-‐‑‒–—―]")
+_WHITESPACE_RUN_RE = re.compile(r"\s+")
+
+
+def _normalize_for_substring_match(text: str) -> str:
+    """
+    Normalizes text for punctuation/whitespace-insensitive substring
+    comparison: hyphens/en-dashes/em-dashes become spaces, then runs of
+    whitespace collapse to a single space. This makes "Pakistan occupied
+    Kashmir" and "Pakistan-occupied Kashmir" (or an em-dash variant)
+    compare equal as substrings. Deliberately narrow in scope - no
+    stemming, no synonym expansion, no fuzzy/edit-distance matching.
+    """
+    if not text:
+        return ""
+    text = _DASH_CHARS_RE.sub(" ", text)
+    text = _WHITESPACE_RUN_RE.sub(" ", text)
+    return text
+
+
+def count_term_occurrences(
+    text_content: str,
+    term: str,
+    exact_match: bool = False,
+    case_sensitive: bool = False,
+) -> int:
+    """
+    Counts occurrences of a single search term in text_content.
+
+    exact_match=True uses word-boundary regex matching (UNCHANGED behavior -
+    still requires the literal phrasing). exact_match=False (the default,
+    "phrase"/substring mode) normalizes hyphens/dashes to spaces and
+    collapses whitespace on BOTH sides of the comparison before doing a
+    plain substring count, so punctuation differences in compound terms
+    ("Pakistan-occupied Kashmir" vs "Pakistan occupied Kashmir") don't cause
+    a real match to be missed.
+    """
+    if not text_content or not term:
+        return 0
+    if exact_match:
+        pattern = rf"\b{re.escape(term)}\b"
+        flags = 0 if case_sensitive else re.IGNORECASE
+        return len(re.findall(pattern, text_content, flags))
+
+    haystack = text_content if case_sensitive else text_content.lower()
+    needle = term if case_sensitive else term.lower()
+    haystack = _normalize_for_substring_match(haystack)
+    needle = _normalize_for_substring_match(needle)
+    if not needle.strip():
+        # Degenerate term (e.g. only punctuation) - avoid str.count("")'s
+        # len(haystack)+1 pathology.
+        return 0
+    return haystack.count(needle)
+
+
+def match_keyword_against_stored_content(
+    title: str,
+    description: str,
+    body_text: str,
+    url: str,
+    keyword: str,
+    match_type: str = "phrase",
+    case_sensitive: bool = False,
+    exact_match: bool = False,
+) -> bool:
+    """
+    Cheap, in-process re-test of a single keyword against ALREADY-EXTRACTED
+    page content (a CrawledURL row's title/description/full_content/url) -
+    no HTML re-parsing, no network I/O, no hash/simhash recomputation.
+    Mirrors _analyze_page_impl's matching semantics (same count_term_occurrences
+    helper, same boolean-query evaluation) but operates on already-stored text
+    instead of raw HTML. Used by queue_manager.py to re-test a URL that was
+    already crawled under a DIFFERENT keyword against a new keyword whose own
+    discovery independently found the same URL - see the "Gap 1" discussion in
+    backend/queue_manager.py's _process_single_keyword() Step 2.
+    """
+    if not keyword or not keyword.strip():
+        return False
+    title = title or ""
+    description = description or ""
+    body_text = body_text or ""
+    url = url or ""
+
+    if match_type == "boolean":
+        full_text = f"{title}\n{description}\n{body_text}\n{url}"
+        return Crawler.evaluate_boolean_query(full_text, keyword, case_sensitive)
+
+    term = keyword.strip()
+    for text_content in (title, description, body_text, url):
+        if count_term_occurrences(text_content, term, exact_match=exact_match, case_sensitive=case_sensitive) > 0:
+            return True
+    return False
+
+
 class Crawler:
     def __init__(self, user_agent: str = None, proxy_url: str = None):
         dynamic_ua, major_version = get_chrome_user_agent_details()
@@ -1120,21 +1222,18 @@ def _analyze_page_impl(
             search_terms = {t[0] or t[1] for t in search_terms if t[0] or t[1]}
             search_terms = {t for t in search_terms if t.upper() not in ("AND", "OR", "NOT")}
             
-        # Count occurrences in each location
+        # Count occurrences in each location. Delegates the actual per-term
+        # comparison to the module-level count_term_occurrences() so the
+        # punctuation/whitespace-normalization behavior for the non-exact_match
+        # (substring) path stays in exactly one place - shared with
+        # match_keyword_against_stored_content()'s re-test path in
+        # queue_manager.py rather than duplicated.
         def count_occurrences(text_content: str, terms: Set[str]) -> int:
             count = 0
             for term in terms:
-                if exact_match:
-                    # Match exact words using regex word boundaries
-                    pattern = rf"\b{re.escape(term)}\b"
-                    flags = 0 if case_sensitive else re.IGNORECASE
-                    count += len(re.findall(pattern, text_content, flags))
-                else:
-                    # Match substrings
-                    if case_sensitive:
-                        count += text_content.count(term)
-                    else:
-                        count += text_content.lower().count(term.lower())
+                count += count_term_occurrences(
+                    text_content, term, exact_match=exact_match, case_sensitive=case_sensitive
+                )
             return count
 
         found_in_url = count_occurrences(url, search_terms) > 0

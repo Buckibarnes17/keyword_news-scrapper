@@ -34,7 +34,7 @@ from concurrent.futures.process import BrokenProcessPool
 from backend.database import SessionLocal
 from backend.models import SearchQuery, CrawledURL, KeywordProgress
 from backend.search_engine import search_web
-from backend.crawler import Crawler
+from backend.crawler import Crawler, match_keyword_against_stored_content
 from bs4 import BeautifulSoup
 from backend.site_search_detector import SiteSearchDetector
 from backend.url_classifier import filter_candidate_urls, is_chinese_url
@@ -1056,6 +1056,176 @@ def _sanitize_for_db(result: dict) -> dict:
     }
 
 
+def _retest_existing_row_for_keyword(
+    db,
+    search_id: int,
+    kw: str,
+    query,
+    existing: CrawledURL,
+    retested_matched_ids: Set[int],
+) -> None:
+    """
+    Gap 1 fix: a URL only ever got keyword-matched against the ONE keyword
+    whose crawl first fetched it, even when a DIFFERENT keyword's own,
+    independent discovery also finds the same URL later. This re-tests `kw`
+    against a row that's already terminal (status "matched" or "skipped")
+    for this search_id, using ONLY its already-stored content
+    (title/description/full_content/url) - no re-fetch, no re-hashing, no
+    network I/O. Confirmed empirically against search_id 148/152: e.g.
+    https://nagalandpost.com/pok-protests-intensify-amid-fears-of-direct-control/
+    sat with status="skipped", matched_keywords=[] - crawled once under some
+    other keyword, never re-tested against the POJK-cluster terms whose own
+    discovery independently found the same URL.
+
+    Counter semantics (mirrors the inc_crawled/inc_matched pattern in the
+    per-future-completion loop below, minus inc_crawled - this row was
+    already crawled, so total_urls_crawled must NOT move again):
+      - KeywordProgress.articles_found for `kw` always increments by 1 when
+        `kw` newly matches here - this keyword genuinely just gained a match
+        it didn't have before, regardless of the row's prior status.
+      - SearchQuery.total_urls_matched increments by 1 ONLY if the row is
+        transitioning to "matched" for the FIRST time (was "skipped", not
+        already "matched" under a different keyword) - otherwise a URL that
+        matches two different keywords in the same job would be double
+        counted, which total_urls_matched must never do (it counts distinct
+        matched URLs, not (URL, keyword) pairs - see how kw_matched is
+        recomputed per-keyword via a COUNT query at keyword completion,
+        which is a distinct, per-keyword metric from this job-wide total).
+    """
+    if existing.status not in ("matched", "skipped"):
+        return
+    if not kw or not kw.strip() or kw == "__config__":
+        return
+
+    # Re-fetch fresh state immediately before deciding/writing. `existing` may
+    # have been read moments ago by the caller's bulk query, and other keyword
+    # workers (each with their OWN independent DB session) can be concurrently
+    # re-testing/transitioning this same row right now. This narrows, though
+    # does not fully eliminate, the race window for the "first transition to
+    # matched" check below - this codebase doesn't use row-level locking
+    # (SELECT ... FOR UPDATE) anywhere else either, so full atomicity across
+    # sessions is a larger change than this fix's scope.
+    # populate_existing=True is required here, not optional: `db` is a
+    # long-lived Session for this whole _process_single_keyword call, and
+    # Step 2 above already loaded this exact row into `db`'s identity map
+    # moments ago (that's `existing`, the argument this function received).
+    # Without populate_existing, SQLAlchemy returns that SAME cached Python
+    # object from the identity map instead of re-querying - meaning this
+    # "fresh" re-fetch would silently be a no-op and defeat the entire point
+    # of re-checking. populate_existing=True forces an actual SELECT that
+    # overwrites the cached object's attributes with current DB state,
+    # which is what lets this see another keyword's OWN session having
+    # committed a status change in the meantime.
+    fresh = db.scalars(
+        select(CrawledURL).where(CrawledURL.id == existing.id).execution_options(populate_existing=True)
+    ).first()
+    if fresh is None or fresh.status not in ("matched", "skipped"):
+        return
+    existing = fresh
+
+    try:
+        already_matched_keywords = json.loads(existing.matched_keywords) if existing.matched_keywords else []
+        if not isinstance(already_matched_keywords, list):
+            already_matched_keywords = []
+    except Exception:
+        already_matched_keywords = []
+
+    if kw in already_matched_keywords:
+        # Already tested (and matched) for this exact keyword - nothing to do.
+        return
+
+    is_match = match_keyword_against_stored_content(
+        title=existing.title,
+        description=existing.description,
+        body_text=existing.full_content,
+        url=existing.url,
+        keyword=kw,
+        match_type=query.match_type,
+        case_sensitive=query.case_sensitive,
+        exact_match=query.exact_match,
+    )
+    if not is_match:
+        return
+
+    was_matched_before = existing.status == "matched"
+
+    updated_keywords = already_matched_keywords + [kw]
+    existing.matched_keywords = json.dumps(updated_keywords)
+    existing.status = "matched"
+    db.flush()
+
+    db.execute(
+        update(KeywordProgress)
+        .where(KeywordProgress.search_query_id == search_id)
+        .where(KeywordProgress.keyword == kw)
+        .values(articles_found=KeywordProgress.articles_found + 1)
+    )
+    if not was_matched_before:
+        db.execute(
+            update(SearchQuery)
+            .where(SearchQuery.id == search_id)
+            .values(total_urls_matched=SearchQuery.total_urls_matched + 1)
+        )
+    db.commit()
+    retested_matched_ids.add(existing.id)
+
+
+def _retest_all_terminal_rows_for_keyword(
+    db,
+    search_id: int,
+    kw: str,
+    query,
+    retested_matched_ids: Set[int],
+) -> None:
+    """
+    Broader companion to _retest_existing_row_for_keyword(). That function
+    only fires from within the candidate_urls-processing loop - i.e. it only
+    re-tests a URL against `kw` if `kw`'s OWN discovery this call happened to
+    independently surface that exact URL as one of ITS OWN candidates. That
+    scope is real and useful (it's what lets a shared/keyword-independent
+    discovery hit get re-tested cheaply instead of blindly re-fetched - see
+    the crawl_only branch above), but it's narrower than the actual Gap 1
+    problem: a URL some OTHER keyword already crawled to a terminal state
+    should be tested against `kw` even if `kw`'s OWN discovery this call
+    never happened to surface it at all (e.g. its site-restricted
+    search_web()/SiteSearchDetector query for THIS keyword's specific term
+    just didn't return it, even though the URL is genuinely about this
+    keyword's topic).
+
+    Confirmed live (search_id=158): "PoK protests intensify amid fears of
+    direct control" (title, verbatim) sat "skipped" with matched_keywords=[]
+    and was never re-tested against the "PoK protests" keyword specifically
+    because "PoK protests"'s own discovery for nagalandpost.com never
+    surfaced that particular URL as one of its own candidates - even though
+    match_keyword_against_stored_content() correctly returns True for it.
+
+    This pulls EVERY already-terminal ("matched"/"skipped") CrawledURL row
+    for this search_id - not just the ones intersecting `kw`'s own
+    candidate_urls - and re-tests each one that doesn't already have `kw` in
+    its matched_keywords. More expensive than the candidate-intersection
+    version (O(all terminal rows in the job) instead of O(overlap)), but
+    match-only re-testing is pure in-process string matching against
+    already-extracted text (no network, no re-fetch, no re-hashing), so this
+    stays cheap even for a large job. Runs once, at the start of each
+    keyword's own crawl_only call - it catches whatever's already terminal
+    in this search_id AT THAT MOMENT (a keyword that starts very early, before
+    other keywords have crawled much, will naturally catch less than one that
+    starts later - this is a best-effort pass, not a continuously-updated
+    one, matching how the rest of this cross-keyword accounting already
+    works incrementally rather than via a global barrier).
+    """
+    if not kw or not kw.strip() or kw == "__config__":
+        return
+    terminal_rows = db.scalars(
+        select(CrawledURL).where(
+            CrawledURL.search_id == search_id,
+            CrawledURL.status.in_(("matched", "skipped")),
+        )
+    ).all()
+    for row in terminal_rows:
+        _retest_existing_row_for_keyword(db, search_id, kw, query, row, retested_matched_ids)
+
+
 def _process_single_keyword(
     search_id: int,
     kw: str,
@@ -1089,6 +1259,14 @@ def _process_single_keyword(
     # secondary `UnboundLocalError` on the way out instead of a clean failure.
     candidate_urls: List[str] = []
     kp_record = None
+    # IDs of rows re-classified as "matched" for `kw` via
+    # _retest_existing_row_for_keyword() (Gap 1 fix - see that function's
+    # docstring) rather than via a fresh crawl_url_task fetch this call. These
+    # never enter `db_urls` (no re-fetch happens for them), so the keyword-
+    # completion recount below must fold them in explicitly, or the
+    # kp_record.articles_found overwrite there would silently erase the
+    # increment _retest_existing_row_for_keyword() already applied.
+    retested_matched_ids: Set[int] = set()
     try:
         if _queue_stop_event.is_set() or is_job_stopped(search_id):
             return []
@@ -1434,10 +1612,29 @@ def _process_single_keyword(
         if crawl_only:
             if candidate_urls:
                 # Retrieve from database
-                db_urls = db.scalars(select(CrawledURL).where(
+                _matching_rows = db.scalars(select(CrawledURL).where(
                     CrawledURL.search_id == search_id,
                     CrawledURL.url.in_(candidate_urls)
                 )).all()
+                # Gap 1 fix: this branch is the one actually exercised by the
+                # real Phase 1 (VPN)/Phase 2 (normal) crawl passes - every
+                # keyword whose own candidate_urls independently includes a
+                # URL that some OTHER keyword already crawled to a terminal
+                # state ("matched"/"skipped") used to land here and get
+                # blindly re-submitted to crawl_url_task for a completely
+                # redundant re-fetch, whose result then unconditionally
+                # overwrote the row (last writer wins) - silently discarding
+                # whichever earlier keyword's match/content had been written,
+                # matched_keywords included. Route those rows through the
+                # same cheap, no-refetch re-test used by the discovery-phase
+                # branch below instead of re-crawling them.
+                for _row in _matching_rows:
+                    if _row.status in ("matched", "skipped"):
+                        _retest_existing_row_for_keyword(
+                            db, search_id, kw, query, _row, retested_matched_ids
+                        )
+                    else:
+                        db_urls.append(_row)
         else:
             # Single query to find already-existing URLs for this search_id
             existing_records = {
@@ -1452,6 +1649,17 @@ def _process_single_keyword(
                     existing = existing_records[url]
                     if existing.status in ("pending", "failed"):
                           db_urls.append(existing)
+                    elif existing.status in ("matched", "skipped"):
+                        # Gap 1 fix: this keyword's own discovery independently
+                        # found a URL some OTHER keyword already crawled to a
+                        # terminal state in this search_id (e.g. resumed/
+                        # re-run discovery against partially-processed rows).
+                        # Re-test `kw` against the already-stored content
+                        # instead of silently ignoring the row - see
+                        # _retest_existing_row_for_keyword()'s docstring.
+                        _retest_existing_row_for_keyword(
+                            db, search_id, kw, query, existing, retested_matched_ids
+                        )
                 else:
                     parsed = urlparse(url)
                     domain_val = parsed.netloc.lower()
@@ -1488,6 +1696,14 @@ def _process_single_keyword(
         if discover_only:
             return candidate_urls
 
+        # Gap 1 fix, broad pass: re-test EVERY already-terminal row in this
+        # search_id against `kw`, not just the ones that happen to intersect
+        # kw's own candidate_urls (the targeted re-test above, inside Step 2's
+        # loop, only covers that narrower overlap case). See
+        # _retest_all_terminal_rows_for_keyword()'s docstring for why both
+        # exist and why this one is necessary for real cross-keyword recovery.
+        _retest_all_terminal_rows_for_keyword(db, search_id, kw, query, retested_matched_ids)
+
         # ── Step 3: Crawl pool ──────────────────────────────────────────────────────
         # Filter URLs to crawl based on Chinese classification phase
         db_urls_to_crawl = []
@@ -1500,9 +1716,19 @@ def _process_single_keyword(
                     continue
             db_urls_to_crawl.append(db_url)
 
-        if not db_urls_to_crawl:
-            return candidate_urls
-
+        # NOTE: previously this was `if not db_urls_to_crawl: return candidate_urls`
+        # (an early return that also skipped the "Mark keyword progress" section
+        # far below). That was safe when db_urls_to_crawl being empty could only
+        # mean "nothing at all to do here". It's no longer safe: the crawl_only
+        # branch above (Gap 1 fix) can now legitimately leave db_urls_to_crawl
+        # empty while `retested_matched_ids` is non-empty - every one of this
+        # keyword's candidates was already crawled under a different keyword and
+        # got re-tested in place rather than added to db_urls. Returning early in
+        # that case would leave kp_record stuck "processing" forever (its
+        # "completed" transition only happens in the section below) even though
+        # this keyword's work for this call is actually done. The loop below is a
+        # no-op for an empty db_urls_to_crawl (0 submissions, 0 pending futures),
+        # so falling through is safe either way.
         import os as _os_w
         if query.engine == "fast":
             base_max = int(_os_w.environ.get("KS_FAST_WORKERS", "25"))
@@ -1639,12 +1865,83 @@ def _process_single_keyword(
                     # result it would otherwise have produced (confirmed live
                     # in search_id=148 for 'china' and 'POJK').
                     try:
-                        db_item = db.scalars(select(CrawledURL).where(CrawledURL.id == url_id)).first()
+                        # populate_existing=True is required, not optional: `db`
+                        # is this whole _process_single_keyword call's long-lived
+                        # Session, and Step 2 already loaded this exact row into
+                        # `db`'s identity map (while building _matching_rows/
+                        # db_urls). Without populate_existing, this SELECT would
+                        # silently return that SAME cached, possibly-now-stale
+                        # object instead of re-querying - defeating the merge
+                        # logic below, which specifically exists to see another
+                        # keyword's OWN session having committed a status change
+                        # to this row in the meantime (confirmed this was a real,
+                        # live bug: without this, the merge check always read the
+                        # pre-Step-3 snapshot and never detected the race).
+                        db_item = db.scalars(
+                            select(CrawledURL).where(CrawledURL.id == url_id).execution_options(populate_existing=True)
+                        ).first()
                         if db_item:
+                            # Capture pre-write state before this result overwrites it.
+                            # See the merge block below for why this is needed.
+                            _prior_status = db_item.status
+                            _prior_matched_keywords = []
+                            if db_item.matched_keywords:
+                                try:
+                                    _parsed_prior = json.loads(db_item.matched_keywords)
+                                    if isinstance(_parsed_prior, list):
+                                        _prior_matched_keywords = _parsed_prior
+                                except Exception:
+                                    pass
+
                             sanitized_result = _sanitize_for_db(result)
                             for key, val in sanitized_result.items():
                                 if hasattr(db_item, key):
                                     setattr(db_item, key, val)
+
+                            # Merge, don't clobber. This row's URL can be in
+                            # MULTIPLE keywords' own candidate_urls at once (e.g.
+                            # a keyword-independent shared discovery hit, or
+                            # each keyword's own site-native-search/search_web
+                            # query independently returning the same URL). Step 2
+                            # above only diverts a row to the no-refetch re-test
+                            # path (_retest_existing_row_for_keyword) if it's
+                            # ALREADY terminal ("matched"/"skipped") at the moment
+                            # a keyword's Step 2 runs - if two keywords' Step 2
+                            # calls both see the row still "pending" (a real race:
+                            # both keyword-worker threads query around the same
+                            # time, before either has finished crawling), BOTH
+                            # submit their own crawl_url_task for the identical
+                            # url_id, and without this merge, whichever keyword's
+                            # write lands here LAST would silently overwrite the
+                            # WHOLE row - discarding an EARLIER keyword's genuine
+                            # match entirely, matched_keywords included.
+                            # Confirmed live in search_id=158: url_id 17079's
+                            # [CrawlTiming] log line appears 3 times (three
+                            # separate keywords' crawl_url_task calls for the
+                            # SAME url_id) and its title literally contains "PoK
+                            # protests" verbatim, yet the row's final
+                            # matched_keywords was "[]" - a later, genuinely
+                            # non-matching keyword's write overwrote an earlier
+                            # keyword's real match.
+                            _new_matched_keywords = []
+                            if db_item.matched_keywords:
+                                try:
+                                    _parsed_new = json.loads(db_item.matched_keywords)
+                                    if isinstance(_parsed_new, list):
+                                        _new_matched_keywords = _parsed_new
+                                except Exception:
+                                    pass
+                            _merged_matched_keywords = list(dict.fromkeys(_prior_matched_keywords + _new_matched_keywords))
+                            if _merged_matched_keywords != _new_matched_keywords:
+                                db_item.matched_keywords = json.dumps(_merged_matched_keywords)
+                            if _prior_status == "matched" and db_item.status != "matched":
+                                # A previously-committed write for this SAME row
+                                # already found a genuine match under a different
+                                # keyword - this write's own status (a non-match,
+                                # or a dedup-detector downgrade to "skipped") must
+                                # not regress a real match back to unmatched.
+                                db_item.status = "matched"
+
                             db.flush()
 
                             if db_item.status != "pending":
@@ -1746,9 +2043,16 @@ def _process_single_keyword(
                     kp_record.completed_at = datetime.now(timezone.utc)
                     db.commit()
             else:
+                # Fold in rows re-classified as "matched" via
+                # _retest_existing_row_for_keyword() (Gap 1 fix) - they never
+                # went through db_urls/crawl_url_task this call (no re-fetch
+                # happened for them), so without this the recount below would
+                # silently overwrite kp_record.articles_found back down,
+                # erasing the increment already applied for those rows.
+                _counted_ids = {u.id for u in db_urls} | retested_matched_ids
                 kw_matched = db.execute(select(func.count(CrawledURL.id)).where(
                     CrawledURL.search_id == search_id,
-                    CrawledURL.id.in_([u.id for u in db_urls]),
+                    CrawledURL.id.in_(_counted_ids),
                     CrawledURL.status == "matched"
                 )).scalar() or 0
                 if kp_record:

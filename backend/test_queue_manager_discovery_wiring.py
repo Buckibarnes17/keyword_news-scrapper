@@ -978,3 +978,348 @@ def test_one_bad_row_write_failure_does_not_abort_the_whole_keyword(monkeypatch,
         "loop and abort the whole keyword - see search_id=148 ('china'/'POJK' both "
         "marked 'failed' entirely because of exactly this)"
     )
+
+
+# ── Gap 1 fix: re-test already-crawled content against a new keyword ─────────
+
+def test_retest_already_crawled_row_against_new_keyword(monkeypatch, isolated_db):
+    """Gap 1 regression test (search_id=148/152 - e.g.
+    https://nagalandpost.com/pok-protests-intensify-amid-fears-of-direct-control/,
+    which sat 'skipped' with matched_keywords=[] forever because no keyword
+    whose OWN discovery later found the same URL ever got a chance to test it).
+
+    Simulates a CrawledURL row already left 'skipped' (crawled once under some
+    other keyword, matched_keywords=[]) whose STORED content would genuinely
+    match a keyword ('kw2') that independently discovers the same URL later in
+    the same job. Running the flow for kw2 must re-test it from the already-
+    stored content - no re-fetch (crawl_url_task must not be called at all) -
+    and:
+      * the row transitions to status='matched'
+      * 'kw2' is appended to matched_keywords
+      * KeywordProgress.articles_found for kw2 increments by 1
+      * SearchQuery.total_urls_matched increments by exactly 1 (first time
+        this URL becomes matched)
+      * total_urls_crawled is NOT incremented again (it was already crawled)
+
+    Then a SECOND, different keyword ('kw3') that also independently
+    discovers the same URL and ALSO genuinely matches the stored content is
+    re-tested against the now-already-matched row. This must:
+      * add 'kw3' to matched_keywords alongside 'kw2'
+      * increment KeywordProgress.articles_found for kw3 by 1
+      * NOT increment total_urls_matched again (same URL, already counted as
+        matched once - matching a second keyword must not double-count it)
+    """
+    import json as _json
+
+    db = isolated_db()
+    q = SearchQuery(
+        id=310, keyword='["china", "PoK protests", "direct control"]', status="processing",
+        total_urls_matched=0, total_urls_crawled=1,
+    )
+    db.add(q)
+    for kw_name in ("PoK protests", "direct control"):
+        db.add(KeywordProgress(search_query_id=310, keyword=kw_name, status="pending", articles_found=0))
+    row = CrawledURL(
+        search_id=310,
+        url="https://example.com/pok-protests-intensify-amid-fears-of-direct-control",
+        domain="example.com",
+        status="skipped",
+        matched_keywords="[]",
+        title="PoK protests intensify amid fears of direct control",
+        description="",
+        full_content="Residents report PoK protests continuing this week across several towns.",
+        error_message="Duplicate page content detected.",
+        is_duplicate=True,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    row_id = row.id
+    db.close()
+
+    def _explode_if_crawled(url_id, **kwargs):
+        raise AssertionError(
+            "crawl_url_task must NOT be called for a re-test of an "
+            "already-crawled row - this must be a cheap, no-refetch re-test"
+        )
+
+    monkeypatch.setattr(qm, "crawl_url_task", _explode_if_crawled)
+
+    query = _direct_query_mock(
+        direct_urls=row.url,
+        match_type="phrase",
+        case_sensitive=False,
+        exact_match=False,
+    )
+
+    # ── First re-test: kw2, a keyword whose own discovery independently
+    # finds the already-crawled (and "skipped") URL, and genuinely matches
+    # its stored title.
+    qm._process_single_keyword(
+        search_id=310,
+        kw="PoK protests",
+        query=query,
+        languages_filter=None,
+        seen_content_hashes=set(),
+        seen_simhashes=[],
+        seen_lock=threading.Lock(),
+        total_keyword_count=3,
+        crawl_only=True,
+        discovered_urls=[row.url],
+        mark_completed=True,
+    )
+
+    db = isolated_db()
+    try:
+        q_after = db.query(SearchQuery).filter(SearchQuery.id == 310).first()
+        row_after = db.query(CrawledURL).filter(CrawledURL.id == row_id).first()
+        kp2_after = db.query(KeywordProgress).filter(
+            KeywordProgress.search_query_id == 310, KeywordProgress.keyword == "PoK protests"
+        ).first()
+    finally:
+        db.close()
+
+    assert row_after.status == "matched", "row must transition from skipped to matched"
+    assert "PoK protests" in _json.loads(row_after.matched_keywords)
+    assert kp2_after.articles_found == 1
+    assert q_after.total_urls_matched == 1, "first keyword to match this URL must increment total_urls_matched by 1"
+    assert q_after.total_urls_crawled == 1, "re-testing already-stored content must NOT bump total_urls_crawled again"
+
+    # ── Second re-test: kw3, a DIFFERENT keyword whose own discovery also
+    # independently finds the SAME URL (now already "matched" under kw2) and
+    # ALSO genuinely matches the stored title. Must add kw3's own progress
+    # credit without double-counting total_urls_matched for the same URL.
+    qm._process_single_keyword(
+        search_id=310,
+        kw="direct control",
+        query=query,
+        languages_filter=None,
+        seen_content_hashes=set(),
+        seen_simhashes=[],
+        seen_lock=threading.Lock(),
+        total_keyword_count=3,
+        crawl_only=True,
+        discovered_urls=[row.url],
+        mark_completed=True,
+    )
+
+    db = isolated_db()
+    try:
+        q_after2 = db.query(SearchQuery).filter(SearchQuery.id == 310).first()
+        row_after2 = db.query(CrawledURL).filter(CrawledURL.id == row_id).first()
+        kp3_after = db.query(KeywordProgress).filter(
+            KeywordProgress.search_query_id == 310, KeywordProgress.keyword == "direct control"
+        ).first()
+    finally:
+        db.close()
+
+    assert row_after2.status == "matched"
+    matched_list = _json.loads(row_after2.matched_keywords)
+    assert "PoK protests" in matched_list and "direct control" in matched_list
+    assert kp3_after.articles_found == 1, "kw3 genuinely matched and must get its own progress credit"
+    assert q_after2.total_urls_matched == 1, (
+        "the SAME URL matching a second keyword must NOT double-count "
+        "total_urls_matched - it was already counted as matched once"
+    )
+
+
+# ── Concurrent-redundant-crawl merge fix (found while verifying Gap 1 live) ──
+
+def test_concurrent_redundant_crawl_does_not_clobber_earlier_match(monkeypatch):
+    """Regression test for a bug found while live-verifying the Gap 1 fix
+    against search_id=158: two DIFFERENT keywords whose own candidate_urls
+    BOTH independently contain the SAME URL can each end up submitting their
+    OWN crawl_url_task for it if both keywords' Step 2 snapshot the row while
+    it's still 'pending' (a real race - Step 2 only diverts to the no-refetch
+    re-test path for a row that's ALREADY terminal at snapshot time; two
+    keyword-worker threads can both see 'pending' before either finishes).
+    Confirmed live: url_id 17079 in search_id=158 was fetched 3 separate
+    times (once per keyword whose candidate list happened to include it), and
+    although its title literally contained "PoK protests" verbatim - a match
+    that needs neither Part 1 nor Part 2's fixes - the row's final
+    matched_keywords ended up "[]" because a LATER, genuinely non-matching
+    keyword's write silently overwrote an EARLIER keyword's real match.
+
+    Simulates this by having the mocked crawl_url_task for kw2 (nokw2's own
+    analysis result is a genuine non-match) commit a DIFFERENT keyword's
+    (kw1) matching result to the SAME row, via a separate session, in the
+    middle of kw2's own crawl_url_task call - exactly mirroring "another
+    keyword's crawl_url_task already completed and committed while this one
+    was still fetching/analyzing." The row must end up 'matched' with BOTH
+    keywords' names present in matched_keywords, not just whichever call
+    wrote last.
+    """
+    import json as _json
+    from sqlalchemy.pool import StaticPool
+
+    # sqlite:///:memory: is per-connection - the real ThreadPoolExecutor
+    # worker thread that crawl_url_task runs on (see _process_single_keyword's
+    # Step 3) would otherwise get its own empty database when it calls
+    # SessionLocal(). StaticPool forces every thread to share the ONE actual
+    # connection/database - same pattern as
+    # test_crawl_concurrency_semaphore_caps_simultaneous_work above.
+    test_engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(bind=test_engine)
+    TestSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=test_engine)
+    monkeypatch.setattr(qm, "SessionLocal", TestSessionLocal)
+
+    db = TestSessionLocal()
+    q = SearchQuery(id=311, keyword='["kw1", "kw2"]', status="processing",
+                     total_urls_matched=0, total_urls_crawled=0)
+    db.add(q)
+    db.add(KeywordProgress(search_query_id=311, keyword="kw2", status="pending", articles_found=0))
+    row = CrawledURL(search_id=311, url="https://example.com/race-article",
+                      domain="example.com", status="pending")
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    row_id = row.id
+    db.close()
+
+    def fake_crawl_url_task(url_id, keyword=None, **kwargs):
+        # Simulate kw1's OWN crawl_url_task (a separate keyword-worker thread,
+        # its own independent DB session) completing and committing its
+        # genuine match WHILE this (kw2's) call is still "in flight" - i.e.
+        # before THIS call's own write-back has happened.
+        side_db = TestSessionLocal()
+        try:
+            side_row = side_db.query(CrawledURL).filter(CrawledURL.id == url_id).first()
+            side_row.status = "matched"
+            side_row.matched_keywords = _json.dumps(["kw1"])
+            side_row.full_content = "kw1's own crawl content"
+            side_db.commit()
+        finally:
+            side_db.close()
+
+        # kw2's OWN analysis of the SAME page is a genuine non-match.
+        return url_id, {"status": "skipped", "matched_keywords": "[]", "full_content": "kw2's own crawl content"}
+
+    monkeypatch.setattr(qm, "crawl_url_task", fake_crawl_url_task)
+
+    query = _direct_query_mock(direct_urls=row.url, match_type="phrase",
+                                case_sensitive=False, exact_match=False)
+
+    qm._process_single_keyword(
+        search_id=311,
+        kw="kw2",
+        query=query,
+        languages_filter=None,
+        seen_content_hashes=set(),
+        seen_simhashes=[],
+        seen_lock=threading.Lock(),
+        total_keyword_count=2,
+        crawl_only=True,
+        discovered_urls=[row.url],
+        mark_completed=True,
+    )
+
+    db = TestSessionLocal()
+    try:
+        row_after = db.query(CrawledURL).filter(CrawledURL.id == row_id).first()
+    finally:
+        db.close()
+
+    assert row_after.status == "matched", (
+        "kw2's own non-match write must not regress the row back from "
+        "'matched' (committed concurrently by kw1) to 'skipped'"
+    )
+    matched_list = _json.loads(row_after.matched_keywords)
+    assert "kw1" in matched_list, "kw1's earlier genuine match must survive"
+
+
+# ── Broad re-test: catches URLs outside the current keyword's OWN candidates ──
+
+def test_retest_covers_terminal_rows_outside_current_keywords_own_candidates(monkeypatch, isolated_db):
+    """Coordinator-requested extension: _retest_existing_row_for_keyword() (the
+    Gap 1 fix) only fires from inside the candidate_urls-processing loop - it
+    only re-tests a URL against `kw` if `kw`'s OWN discovery this call
+    happened to independently surface that exact URL as one of ITS OWN
+    candidates. That's too narrow: confirmed live in search_id=158, "PoK
+    protests intensify amid fears of direct control" (title, verbatim) sat
+    'skipped' with matched_keywords=[] and was never re-tested against the
+    "PoK protests" keyword specifically because THAT keyword's own discovery
+    never happened to surface that particular URL as a candidate - even
+    though match_keyword_against_stored_content() correctly returns True for
+    it directly.
+
+    This proves _retest_all_terminal_rows_for_keyword() closes that gap: a
+    row that's already terminal ('skipped') and whose URL is NOT anywhere in
+    the current keyword's own discovered_urls/candidate_urls must still get
+    picked up and correctly re-tested/matched, purely because it's an
+    already-terminal row for this search_id.
+    """
+    import json as _json
+
+    db = isolated_db()
+    q = SearchQuery(id=312, keyword='["china", "PoK protests"]', status="processing",
+                     total_urls_matched=0, total_urls_crawled=1)
+    db.add(q)
+    db.add(KeywordProgress(search_query_id=312, keyword="PoK protests", status="pending", articles_found=0))
+    # This row was crawled under some OTHER keyword ("china") whose own
+    # discovery found it; "PoK protests"'s own discovery never surfaces this
+    # URL at all - it will NOT appear in discovered_urls below.
+    never_discovered_by_kw2 = CrawledURL(
+        search_id=312,
+        url="https://nagalandpost.com/pok-protests-intensify-amid-fears-of-direct-control/",
+        domain="nagalandpost.com",
+        status="skipped",
+        matched_keywords="[]",
+        title="PoK protests intensify amid fears of direct control",
+        description="",
+        full_content="Residents report unrest continuing this week across several towns.",
+    )
+    db.add(never_discovered_by_kw2)
+    db.commit()
+    db.refresh(never_discovered_by_kw2)
+    row_id = never_discovered_by_kw2.id
+    db.close()
+
+    def _explode_if_crawled(url_id, **kwargs):
+        raise AssertionError("crawl_url_task must NOT be called for this re-test")
+
+    monkeypatch.setattr(qm, "crawl_url_task", _explode_if_crawled)
+
+    query = _direct_query_mock(
+        direct_urls="https://example.com/something-unrelated",
+        match_type="phrase", case_sensitive=False, exact_match=False,
+    )
+
+    # Note: discovered_urls deliberately does NOT include
+    # never_discovered_by_kw2.url - "PoK protests"'s own discovery this call
+    # only found a completely different, unrelated URL.
+    qm._process_single_keyword(
+        search_id=312,
+        kw="PoK protests",
+        query=query,
+        languages_filter=None,
+        seen_content_hashes=set(),
+        seen_simhashes=[],
+        seen_lock=threading.Lock(),
+        total_keyword_count=2,
+        crawl_only=True,
+        discovered_urls=["https://example.com/something-unrelated"],
+        mark_completed=True,
+    )
+
+    db = isolated_db()
+    try:
+        row_after = db.query(CrawledURL).filter(CrawledURL.id == row_id).first()
+        q_after = db.query(SearchQuery).filter(SearchQuery.id == 312).first()
+        kp_after = db.query(KeywordProgress).filter(
+            KeywordProgress.search_query_id == 312, KeywordProgress.keyword == "PoK protests"
+        ).first()
+    finally:
+        db.close()
+
+    assert row_after.status == "matched", (
+        "a terminal row outside this keyword's own candidate_urls must still "
+        "be picked up by the broad re-test pass"
+    )
+    assert "PoK protests" in _json.loads(row_after.matched_keywords)
+    assert kp_after.articles_found == 1
+    assert q_after.total_urls_matched == 1
+    assert q_after.total_urls_crawled == 1, "re-testing stored content must not bump total_urls_crawled again"

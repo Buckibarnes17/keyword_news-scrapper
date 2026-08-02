@@ -746,6 +746,76 @@ def test_default_date_filter():
 
 
 
+def test_substring_match_ignores_hyphen_punctuation():
+    """
+    Gap 2 fix: the default (non-exact_match) substring-matching path should
+    treat hyphens/en-dashes/em-dashes as equivalent to spaces, so a compound
+    term like "Pakistan occupied Kashmir" matches text that spells it
+    "Pakistan-occupied Kashmir" (a very common real-world phrasing
+    difference), and vice versa. exact_match=True's word-boundary regex path
+    is untouched by this fix and must still require the literal phrasing.
+    """
+    from backend.crawler import count_term_occurrences
+
+    html_hyphenated = """
+    <html><head><title>PoK unrest</title></head>
+    <body><p>Reports describe Pakistan-occupied Kashmir protests intensifying
+    this week.</p></body></html>
+    """
+    html_spaced = """
+    <html><head><title>PoK unrest</title></head>
+    <body><p>Reports describe Pakistan occupied Kashmir protests intensifying
+    this week.</p></body></html>
+    """
+
+    crawler = Crawler()
+
+    # Term spelled with spaces must match text spelled with a hyphen.
+    analysis = crawler.analyze_page(
+        html_content=html_hyphenated,
+        url="https://example.com/pok-unrest",
+        keyword="Pakistan occupied Kashmir",
+        match_type="phrase",
+        case_sensitive=False,
+        exact_match=False,
+    )
+    assert analysis["matched"] is True, "spaced term should match hyphenated text"
+    assert analysis["occurrences"] > 0
+
+    # Term spelled with a hyphen must match text spelled with spaces.
+    analysis2 = crawler.analyze_page(
+        html_content=html_spaced,
+        url="https://example.com/pok-unrest",
+        keyword="Pakistan-occupied Kashmir",
+        match_type="phrase",
+        case_sensitive=False,
+        exact_match=False,
+    )
+    assert analysis2["matched"] is True, "hyphenated term should match spaced text"
+
+    # Em-dash variant too.
+    assert count_term_occurrences(
+        "Pakistan—occupied Kashmir saw unrest", "Pakistan occupied Kashmir"
+    ) == 1
+
+    # exact_match=True is UNCHANGED: still requires the literal phrasing, so
+    # the spaced term must NOT match the hyphenated text under exact_match.
+    analysis_exact = crawler.analyze_page(
+        html_content=html_hyphenated,
+        url="https://example.com/pok-unrest",
+        keyword="Pakistan occupied Kashmir",
+        match_type="phrase",
+        case_sensitive=False,
+        exact_match=True,
+    )
+    assert analysis_exact["matched"] is False, (
+        "exact_match=True must still require the literal phrasing, unaffected by the punctuation-normalization fix"
+    )
+    assert count_term_occurrences(
+        "Pakistan-occupied Kashmir", "Pakistan occupied Kashmir", exact_match=True
+    ) == 0
+
+
 if __name__ == "__main__":
     try:
         run_tests()
