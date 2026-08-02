@@ -798,3 +798,183 @@ def test_crawl_concurrency_semaphore_caps_simultaneous_work(monkeypatch):
         f"semaphore to cap it at 3"
     )
     assert peak["max"] >= 2, "expected genuine overlap to occur, not accidental full serialization"
+
+
+# ── per-URL write isolation (search_id=148: 'china'/'POJK' NUL-byte crash) ────
+#
+# Root cause: Postgres text/varchar columns cannot store a literal NUL (0x00)
+# byte at all. Some scraped page's content contained one, db.flush() raised
+# "A string literal cannot contain NUL (0x00) characters.", and - because it
+# wasn't caught locally - the exception propagated out of the ENTIRE
+# while-pending result-processing loop, out of _process_single_keyword itself,
+# and was only caught by the function's outer except-handler, which marked the
+# WHOLE keyword "failed" and discarded every other result it would otherwise
+# have produced. Two fixes: (1) _sanitize_for_db() strips NUL bytes from
+# result values before they're ever assigned, eliminating the NUL-byte case
+# specifically; (2) the per-URL write unit of work is wrapped in its own
+# try/except so that ANY other unexpected write failure isolates to that one
+# row instead of killing the whole keyword.
+
+def test_nul_byte_in_crawl_result_is_sanitized_before_write(monkeypatch, isolated_db):
+    """Part 1 regression test for search_id=148. A crawl_url_task result
+    containing a literal NUL byte in full_content/title must not raise when
+    written, the NUL byte must actually be gone from what lands in the row,
+    and the row must end up with a sane, non-stuck status."""
+    db = isolated_db()
+    q = SearchQuery(id=301, keyword="china", status="processing")
+    db.add(q)
+    kp = KeywordProgress(search_query_id=301, keyword="china", status="pending")
+    db.add(kp)
+    u = CrawledURL(search_id=301, url="https://example.com/nul-article",
+                    domain="example.com", status="pending")
+    db.add(u)
+    db.commit()
+    db.refresh(u)
+    url_id = u.id
+    db.close()
+
+    def fake_crawl_url_task(url_id, **kwargs):
+        return url_id, {
+            "status": "matched",
+            "full_content": "Beijing said \x00 today that...",
+            "title": "China\x00 news",
+            "matched_keywords": '["china"]',
+        }
+
+    monkeypatch.setattr(qm, "crawl_url_task", fake_crawl_url_task)
+
+    query = _direct_query_mock(direct_urls="https://example.com/nul-article")
+
+    # Must not raise.
+    qm._process_single_keyword(
+        search_id=301,
+        kw="china",
+        query=query,
+        languages_filter=None,
+        seen_content_hashes=set(),
+        seen_simhashes=[],
+        seen_lock=threading.Lock(),
+        total_keyword_count=1,
+        crawl_only=True,
+        discovered_urls=["https://example.com/nul-article"],
+        mark_completed=True,
+    )
+
+    db = isolated_db()
+    try:
+        row = db.query(CrawledURL).filter(CrawledURL.id == url_id).first()
+        kp_row = db.query(KeywordProgress).filter(
+            KeywordProgress.search_query_id == 301, KeywordProgress.keyword == "china"
+        ).first()
+    finally:
+        db.close()
+
+    assert row.status == "matched", (
+        "the row should have been written and matched normally, not left stuck "
+        "pending/failed"
+    )
+    assert "\x00" not in row.full_content, "NUL byte must be stripped from full_content"
+    assert row.full_content == "Beijing said  today that..."
+    assert "\x00" not in row.title, "NUL byte must be stripped from title too"
+    assert row.title == "China news"
+    assert kp_row.status == "completed", (
+        "the keyword itself must finish 'completed', not be dragged down by "
+        "content that used to crash the write"
+    )
+
+
+def test_one_bad_row_write_failure_does_not_abort_the_whole_keyword(monkeypatch, isolated_db):
+    """Part 2 regression test: this is the actual 'one bad row shouldn't kill
+    everything' test, deliberately using a DB error UNRELATED to NUL bytes (so
+    it isn't accidentally passing only because of the Part 1 fix). Simulates
+    db.flush() raising for exactly one URL out of three in the same batch -
+    the other two must still get written/committed correctly, and the keyword
+    must still finish 'completed' rather than 'failed'."""
+    db = isolated_db()
+    q = SearchQuery(id=302, keyword="test", status="processing")
+    db.add(q)
+    kp = KeywordProgress(search_query_id=302, keyword="test", status="pending")
+    db.add(kp)
+    urls = []
+    for i in range(3):
+        u = CrawledURL(search_id=302, url=f"https://example.com/article-{i}",
+                        domain="example.com", status="pending")
+        db.add(u)
+        urls.append(u)
+    db.commit()
+    for u in urls:
+        db.refresh(u)
+    url_ids = [u.id for u in urls]
+    db.close()
+
+    poison_id = url_ids[1]
+
+    def fake_crawl_url_task(url_id, **kwargs):
+        return url_id, {"status": "matched", "full_content": f"content-{url_id}"}
+
+    monkeypatch.setattr(qm, "crawl_url_task", fake_crawl_url_task)
+
+    # Wrap the isolated_db sessionmaker so the ONE session _process_single_keyword
+    # creates for itself has a flush() that raises for the poisoned URL's write
+    # only - an unrelated exception, not a NUL-byte one - and behaves normally
+    # for every other write.
+    def poisoned_session_factory():
+        session = isolated_db()
+        real_flush = session.flush
+
+        def flush_maybe_raise(*args, **kwargs):
+            for obj in list(session.dirty) + list(session.new):
+                if isinstance(obj, CrawledURL) and obj.id == poison_id:
+                    raise RuntimeError(f"Simulated unrelated DB failure for url_id={obj.id}")
+            return real_flush(*args, **kwargs)
+
+        session.flush = flush_maybe_raise
+        return session
+
+    monkeypatch.setattr(qm, "SessionLocal", poisoned_session_factory)
+
+    query = _direct_query_mock(direct_urls="\n".join(u.url for u in urls))
+
+    # Must not raise, and must not mark the keyword "failed".
+    qm._process_single_keyword(
+        search_id=302,
+        kw="test",
+        query=query,
+        languages_filter=None,
+        seen_content_hashes=set(),
+        seen_simhashes=[],
+        seen_lock=threading.Lock(),
+        total_keyword_count=1,
+        crawl_only=True,
+        discovered_urls=[u.url for u in urls],
+        mark_completed=True,
+    )
+
+    db = isolated_db()
+    try:
+        rows = {r.id: r for r in db.query(CrawledURL).filter(CrawledURL.search_id == 302).all()}
+        kp_row = db.query(KeywordProgress).filter(
+            KeywordProgress.search_query_id == 302, KeywordProgress.keyword == "test"
+        ).first()
+    finally:
+        db.close()
+
+    for uid in url_ids:
+        if uid == poison_id:
+            assert rows[uid].status == "pending", (
+                "the row whose write failed should be left as-is (still 'pending', "
+                "to be swept up by process_search_query()'s end-of-job cleanup), not "
+                "silently marked matched with data that was never actually committed"
+            )
+        else:
+            assert rows[uid].status == "matched", (
+                f"url_id={uid} should have been written normally despite the other "
+                f"URL's write failure in the same batch"
+            )
+            assert rows[uid].full_content == f"content-{uid}"
+
+    assert kp_row.status == "completed", (
+        "one bad row's write failure must not propagate out of the result-processing "
+        "loop and abort the whole keyword - see search_id=148 ('china'/'POJK' both "
+        "marked 'failed' entirely because of exactly this)"
+    )

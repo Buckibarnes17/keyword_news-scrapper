@@ -1031,6 +1031,31 @@ def _snapshot_query(query) -> SimpleNamespace:
     return SimpleNamespace(**{field: getattr(query, field) for field in _QUERY_SNAPSHOT_FIELDS})
 
 
+def _sanitize_for_db(result: dict) -> dict:
+    """
+    Strip NUL (0x00) bytes from any string value in a crawl-result dict before
+    it's written to Postgres.
+
+    Root cause this exists to fix: Postgres `text`/`varchar` columns cannot
+    store a literal NUL byte at all (a hard Postgres limitation, not a schema
+    bug here) - psycopg2 raises "A string literal cannot contain NUL (0x00)
+    characters." on flush/commit if one slips through. Some scraped pages'
+    content (full_content/raw_html/title/snippet/description, all
+    Text/String columns on CrawledURL) genuinely contain one. Confirmed live:
+    this crashed the 'china' and 'POJK' keywords entirely in search_id=148,
+    because the resulting exception wasn't caught locally and propagated out
+    of the whole per-keyword result-processing loop.
+
+    This is the primary fix; the write block that calls this is also wrapped
+    in its own try/except (see _process_single_keyword) as defense-in-depth
+    for any other Postgres-incompatible content this doesn't catch.
+    """
+    return {
+        key: (val.replace("\x00", "") if isinstance(val, str) else val)
+        for key, val in result.items()
+    }
+
+
 def _process_single_keyword(
     search_id: int,
     kw: str,
@@ -1603,41 +1628,71 @@ def _process_single_keyword(
                             result["is_duplicate"] = True
                             result["error_message"] = "Duplicate page content detected."
 
-                    db_item = db.scalars(select(CrawledURL).where(CrawledURL.id == url_id)).first()
-                    if db_item:
-                        for key, val in result.items():
-                            if hasattr(db_item, key):
-                                setattr(db_item, key, val)
-                        db.flush()
+                    # This whole unit of work (the per-URL write, its counter
+                    # increments, and the commit) is isolated in its own
+                    # try/except so that ONE bad row (e.g. Postgres rejecting
+                    # a NUL byte, or any other unexpected DB error) can't
+                    # propagate out of this loop and take down the entire
+                    # keyword - see _process_single_keyword's outer
+                    # `except Exception` below, which used to catch this and
+                    # mark the WHOLE keyword "failed", discarding every other
+                    # result it would otherwise have produced (confirmed live
+                    # in search_id=148 for 'china' and 'POJK').
+                    try:
+                        db_item = db.scalars(select(CrawledURL).where(CrawledURL.id == url_id)).first()
+                        if db_item:
+                            sanitized_result = _sanitize_for_db(result)
+                            for key, val in sanitized_result.items():
+                                if hasattr(db_item, key):
+                                    setattr(db_item, key, val)
+                            db.flush()
 
-                        if db_item.status != "pending":
-                            inc_crawled = 1
-                        else:
-                            inc_crawled = 0
-                        
-                        if db_item.status == "matched":
-                            inc_matched = 1
-                        else:
-                            inc_matched = 0
+                            if db_item.status != "pending":
+                                inc_crawled = 1
+                            else:
+                                inc_crawled = 0
 
-                        # Write progress incrementally to DB per-page
-                        if inc_crawled > 0 or inc_matched > 0:
-                            db.execute(
-                                update(SearchQuery)
-                                .where(SearchQuery.id == search_id)
-                                .values(
-                                    total_urls_crawled=SearchQuery.total_urls_crawled + inc_crawled,
-                                    total_urls_matched=SearchQuery.total_urls_matched + inc_matched
-                                )
-                            )
-                            if inc_matched > 0:
+                            if db_item.status == "matched":
+                                inc_matched = 1
+                            else:
+                                inc_matched = 0
+
+                            # Write progress incrementally to DB per-page
+                            if inc_crawled > 0 or inc_matched > 0:
                                 db.execute(
-                                    update(KeywordProgress)
-                                    .where(KeywordProgress.search_query_id == search_id)
-                                    .where(KeywordProgress.keyword == kw)
-                                    .values(articles_found=KeywordProgress.articles_found + inc_matched)
+                                    update(SearchQuery)
+                                    .where(SearchQuery.id == search_id)
+                                    .values(
+                                        total_urls_crawled=SearchQuery.total_urls_crawled + inc_crawled,
+                                        total_urls_matched=SearchQuery.total_urls_matched + inc_matched
+                                    )
                                 )
-                            db.commit()
+                                if inc_matched > 0:
+                                    db.execute(
+                                        update(KeywordProgress)
+                                        .where(KeywordProgress.search_query_id == search_id)
+                                        .where(KeywordProgress.keyword == kw)
+                                        .values(articles_found=KeywordProgress.articles_found + inc_matched)
+                                    )
+                                db.commit()
+                    except Exception as write_err:
+                        print(f"[ERROR] Failed to write crawl result for URL ID {url_id}: {write_err}")
+                        # A failed flush()/commit() leaves this Session's
+                        # transaction in an aborted state - roll back before
+                        # continuing, or every subsequent query on `db` in
+                        # this loop (including other URLs' writes) would
+                        # itself fail. Same convention used in this
+                        # function's outer except-handler below.
+                        db.rollback()
+                        # Deliberately leave db_item's row as-is (likely still
+                        # "pending") rather than retrying the write here -
+                        # if the original write failed because of bad
+                        # content in `result`, an immediate retry with the
+                        # same dict could fail identically. process_search_query()'s
+                        # end-of-job cleanup already sweeps any row still
+                        # "pending" and marks it "skipped", so this isn't lost
+                        # forever, just not counted as crawled/matched for
+                        # this keyword.
 
                 # Watchdog check for tasks running too long. Raised from the
                 # original 45s: that value measures wall-clock time since a task
