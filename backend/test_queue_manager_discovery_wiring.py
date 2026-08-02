@@ -75,6 +75,99 @@ def test_run_direct_discovery_profile_driven_dispatch_preserves_metadata(monkeyp
     assert kwargs["keyword"] == "climate"
 
 
+def test_run_direct_discovery_caps_primary_discovery_per_domain(monkeypatch):
+    """Fix A regression test (HANDOFF.md item #2 / new Bug A from search_id=144):
+    a profile-driven strategy.discover() call that genuinely succeeds and returns
+    hundreds of real candidates for one domain must be trimmed against the SAME
+    shared domain_candidate_budget that already gates search_web()/
+    SiteSearchDetector - it was previously completely uncapped. Confirmed live:
+    newslivetv.com alone returned 309 candidates from primary discovery in one
+    61-source run."""
+    monkeypatch.setattr(qm, "_MAX_CANDIDATES_PER_DOMAIN", 20)
+
+    profile = {"domain": "newslivetv.com", "strategy": "sitemap", "enabled": True}
+    monkeypatch.setattr(qm, "_load_site_profiles", lambda: {"newslivetv.com": profile})
+
+    fake_result = DiscoveryResult(
+        urls=[DiscoveredURL(url=f"https://newslivetv.com/post-{i}", source="sitemap")
+              for i in range(300)],
+        errors=[], strategy="sitemap", domain="newslivetv.com",
+    )
+    fake_strategy = MagicMock()
+    fake_strategy.discover.return_value = fake_result
+    monkeypatch.setattr(qm.discovery_base, "get_strategy", lambda p: fake_strategy)
+
+    query = MagicMock()
+    query.id = 104
+    query.date_range_start = None
+    query.proxy_url = None
+    query.ignore_robots = False
+
+    domain_candidate_budget: dict = {}
+    domain_budget_lock = threading.Lock()
+
+    candidates, domains = qm.run_direct_discovery(
+        ["https://newslivetv.com/"], query, keyword="china",
+        domain_candidate_budget=domain_candidate_budget,
+        domain_budget_lock=domain_budget_lock,
+    )
+
+    assert domains == {"newslivetv.com"}
+    urls = candidates["https://newslivetv.com/"]
+    assert len(urls) == 20, (
+        f"expected primary discovery's 300 candidates to be trimmed to the shared "
+        f"budget (cap=20), got {len(urls)}"
+    )
+    assert domain_candidate_budget["newslivetv.com"] == 20
+
+
+def test_run_direct_discovery_shares_budget_between_primary_discovery_and_search_web(monkeypatch):
+    """The shared budget must actually be shared: a domain's primary-discovery
+    contribution and its later search_web/SiteSearchDetector contribution (within
+    the same job) must draw down the SAME counter, not two independent ones -
+    otherwise a domain could still reach 2x the intended cap by combining both
+    mechanisms."""
+    monkeypatch.setattr(qm, "_MAX_CANDIDATES_PER_DOMAIN", 10)
+
+    profile = {"domain": "newslivetv.com", "strategy": "sitemap", "enabled": True}
+    monkeypatch.setattr(qm, "_load_site_profiles", lambda: {"newslivetv.com": profile})
+
+    fake_result = DiscoveryResult(
+        urls=[DiscoveredURL(url=f"https://newslivetv.com/post-{i}", source="sitemap")
+              for i in range(7)],
+        errors=[], strategy="sitemap", domain="newslivetv.com",
+    )
+    fake_strategy = MagicMock()
+    fake_strategy.discover.return_value = fake_result
+    monkeypatch.setattr(qm.discovery_base, "get_strategy", lambda p: fake_strategy)
+
+    query = MagicMock()
+    query.id = 105
+    query.date_range_start = None
+    query.proxy_url = None
+    query.ignore_robots = False
+
+    domain_candidate_budget: dict = {}
+    domain_budget_lock = threading.Lock()
+
+    # Primary discovery draws 7 of the 10-candidate budget.
+    qm.run_direct_discovery(
+        ["https://newslivetv.com/"], query, keyword="china",
+        domain_candidate_budget=domain_candidate_budget,
+        domain_budget_lock=domain_budget_lock,
+    )
+    assert domain_candidate_budget["newslivetv.com"] == 7
+
+    # A later _trim_to_domain_budget() call (as search_web/SiteSearchDetector
+    # results would go through) must only have 3 slots left.
+    remaining_trimmed = qm._trim_to_domain_budget(
+        "https://newslivetv.com/", [f"https://newslivetv.com/web-{i}" for i in range(5)],
+        domain_candidate_budget, domain_budget_lock,
+    )
+    assert len(remaining_trimmed) == 3
+    assert domain_candidate_budget["newslivetv.com"] == 10
+
+
 def test_run_direct_discovery_no_profile_falls_back_to_legacy(monkeypatch):
     """A domain absent from config/site_profiles.json must fall through to the
     unchanged legacy sitemap/feed/link-expansion logic, still wrapped as
@@ -181,7 +274,7 @@ def test_stale_url_dropped_before_crawledurl_row_created(monkeypatch, isolated_d
 
     monkeypatch.setattr(
         qm, "run_direct_discovery",
-        lambda urls, query, keyword=None: (
+        lambda urls, query, keyword=None, **kwargs: (
             {"https://example.com/": [stale_du, fresh_du, unknown_du]},
             {"example.com"},
         ),
@@ -231,7 +324,7 @@ def test_crawledurl_rows_populated_from_discovered_url_metadata(monkeypatch, iso
 
     monkeypatch.setattr(
         qm, "run_direct_discovery",
-        lambda urls, query, keyword=None: (
+        lambda urls, query, keyword=None, **kwargs: (
             {"https://example.com/": [du, unknown_du]},
             {"example.com"},
         ),
@@ -276,7 +369,7 @@ def test_keyword_is_threaded_through_to_run_direct_discovery_call_site(monkeypat
     keyword-independent pre-discovery call in process_search_query."""
     captured = {}
 
-    def fake_run_direct_discovery(urls, query, keyword=None):
+    def fake_run_direct_discovery(urls, query, keyword=None, **kwargs):
         captured["keyword"] = keyword
         return {"https://example.com/": []}, set()
 
@@ -327,7 +420,7 @@ def test_site_restricted_search_respects_shared_domain_budget(monkeypatch, isola
 
     monkeypatch.setattr(qm, "search_web", fake_search_web)
     monkeypatch.setattr(qm, "run_direct_discovery",
-                         lambda urls, query, keyword=None: ({"https://example.com/": []}, {"example.com"}))
+                         lambda urls, query, keyword=None, **kwargs: ({"https://example.com/": []}, {"example.com"}))
 
     mock_crawler = MagicMock()
     mock_crawler.fetch_page.return_value = "<html><body></body></html>"
@@ -407,7 +500,7 @@ def test_site_search_detector_shares_the_same_domain_budget_as_web_search(monkey
     monkeypatch.setattr(qm, "search_web", fake_search_web)
     monkeypatch.setattr(qm, "SiteSearchDetector", FakeDetector)
     monkeypatch.setattr(qm, "run_direct_discovery",
-                         lambda urls, query, keyword=None: ({"https://example.com/": []}, {"example.com"}))
+                         lambda urls, query, keyword=None, **kwargs: ({"https://example.com/": []}, {"example.com"}))
 
     mock_crawler = MagicMock()
     mock_crawler.fetch_page.return_value = "<html><body></body></html>"
@@ -452,6 +545,73 @@ def test_site_search_detector_shares_the_same_domain_budget_as_web_search(monkey
         f"{sorted(r.url for r in rows)}"
     )
     assert domain_candidate_budget["example.com"] == 6
+
+
+# ── _fair_trim_candidates_across_domains: fair candidate-cap trim (Fix B) ──────
+
+def _test_get_domain(url):
+    """Mirrors _process_single_keyword's local get_domain() closure exactly -
+    duplicated here only because that closure isn't accessible outside the
+    function, per the instruction to reuse get_domain() at the real call site
+    (queue_manager.py) rather than redefine it there."""
+    from urllib.parse import urlparse as _urlparse
+    d = _urlparse(url).netloc.lower()
+    return d[4:] if d.startswith("www.") else d
+
+
+def test_fair_trim_gives_every_domain_representation_not_just_the_biggest():
+    """Fix B regression test for the new Bug B found via search_id=144: a naive
+    candidate_urls[:_max_candidates] trim keeps whichever domain happens to be
+    biggest/earliest in list-insertion order and can completely crowd out every
+    other domain. Confirmed live: SiteSearchDetector found substantial real
+    candidate counts for dozens of domains, but only 9 of 61 domains ended up
+    with ANY row in the final CrawledURL table for the whole job. Construct the
+    same shape here: one domain (A) massively dominates, three others (B, C, D)
+    each contribute a small, reasonable amount - every domain must still get at
+    least some representation in the trimmed result."""
+    candidate_urls = (
+        [f"https://domain-a.com/article-{i}" for i in range(480)]
+        + [f"https://domain-b.com/article-{i}" for i in range(10)]
+        + [f"https://domain-c.com/article-{i}" for i in range(10)]
+        + [f"https://domain-d.com/article-{i}" for i in range(10)]
+    )
+    assert len(candidate_urls) == 510
+
+    trimmed = qm._fair_trim_candidates_across_domains(candidate_urls, 20, _test_get_domain)
+
+    assert len(trimmed) == 20
+    domains_present = {_test_get_domain(u) for u in trimmed}
+    assert domains_present == {"domain-a.com", "domain-b.com", "domain-c.com", "domain-d.com"}, (
+        f"expected every domain to have at least one URL in the trimmed result, "
+        f"got only: {domains_present}"
+    )
+    # Round-robin over 4 domains for 20 slots -> each domain gets exactly 5,
+    # since B/C/D (10 each) never run out before the cap is reached.
+    from collections import Counter
+    counts = Counter(_test_get_domain(u) for u in trimmed)
+    assert counts == {"domain-a.com": 5, "domain-b.com": 5, "domain-c.com": 5, "domain-d.com": 5}
+
+
+def test_fair_trim_preserves_each_domains_own_relative_order():
+    """Within a domain's own slice, the fair trim must not reorder/shuffle - it
+    should pop each domain's own candidates in their original relative order
+    (round-robin ACROSS domains, not WITHIN one)."""
+    candidate_urls = (
+        [f"https://domain-a.com/article-{i}" for i in range(5)]
+        + [f"https://domain-b.com/article-{i}" for i in range(5)]
+    )
+    trimmed = qm._fair_trim_candidates_across_domains(candidate_urls, 4, _test_get_domain)
+    a_urls = [u for u in trimmed if _test_get_domain(u) == "domain-a.com"]
+    b_urls = [u for u in trimmed if _test_get_domain(u) == "domain-b.com"]
+    assert a_urls == ["https://domain-a.com/article-0", "https://domain-a.com/article-1"]
+    assert b_urls == ["https://domain-b.com/article-0", "https://domain-b.com/article-1"]
+
+
+def test_fair_trim_is_a_no_op_when_already_under_the_cap():
+    candidate_urls = [f"https://domain-a.com/article-{i}" for i in range(5)]
+    trimmed = qm._fair_trim_candidates_across_domains(candidate_urls, 500, _test_get_domain)
+    assert trimmed == candidate_urls
+    assert trimmed is candidate_urls  # no copy needed when nothing is trimmed
 
 
 # ── _reserve_domain_slot: replaces the busy-wait rate limiter ─────────────────

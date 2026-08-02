@@ -673,7 +673,9 @@ def _load_site_profiles():
 
 
 def run_direct_discovery(
-    unique_raw_urls: List[str], query, keyword: Optional[str] = None
+    unique_raw_urls: List[str], query, keyword: Optional[str] = None,
+    domain_candidate_budget: Optional[Dict[str, int]] = None,
+    domain_budget_lock: Optional[threading.Lock] = None,
 ) -> Tuple[Dict[str, List[DiscoveredURL]], Set[str]]:
     """
     Runs URL discovery once per unique URL, dispatching to the per-site adaptive
@@ -685,6 +687,19 @@ def run_direct_discovery(
     metadata it carries (published_at, title, relevance_score) survives to the
     caller instead of being flattened back to a bare string. That metadata is what
     lets stale/irrelevant URLs get dropped before a fetch is attempted.
+
+    `domain_candidate_budget`/`domain_budget_lock` (optional, shared with
+    _process_single_keyword's callers - see process_search_query()) cap the
+    primary-discovery branch's own contribution per domain via
+    _trim_discovered_to_domain_budget(). Without this, a profile-driven strategy
+    that genuinely succeeds (e.g. a sitemap-strategy site with a large recent
+    surface) can return hundreds of candidates for one domain, completely
+    unbounded by the budget mechanism that otherwise gates
+    search_web()/SiteSearchDetector - confirmed live: newslivetv.com alone
+    returned 309 candidates this way in one 61-source run. No-op (unbounded, as
+    before) if either is None - only real caller today is process_search_query()
+    / _process_single_keyword()'s fallback branch, both of which always supply
+    both.
 
     Returns:
       - A dict mapping d_url -> List[DiscoveredURL]
@@ -740,7 +755,13 @@ def run_direct_discovery(
                 result = strategy.discover(keyword=keyword, max_urls=max_urls, since=effective_since)
                 for err in result.errors:
                     print(f"[Discovery:{profile.get('strategy')}] {domain}: {err}")
-                return d_url, result.urls, domain
+                trimmed_urls = _trim_discovered_to_domain_budget(
+                    domain, result.urls, domain_candidate_budget, domain_budget_lock)
+                if len(trimmed_urls) < len(result.urls):
+                    print(f"[Discovery:{profile.get('strategy')}] {domain}: trimmed "
+                          f"{len(result.urls)} -> {len(trimmed_urls)} candidates "
+                          f"(shared per-domain budget)")
+                return d_url, trimmed_urls, domain
 
         # Sitemap check
         if path.endswith(".xml") or "sitemap" in path:
@@ -897,6 +918,85 @@ def _trim_to_domain_budget(url: str, candidates: List[str],
         trimmed = candidates[:remaining] if remaining < len(candidates) else candidates
         domain_candidate_budget[domain] = used + len(trimmed)
     return trimmed
+
+
+def _trim_discovered_to_domain_budget(domain: str, candidates: List[DiscoveredURL],
+                                       domain_candidate_budget: Optional[Dict[str, int]],
+                                       domain_budget_lock: Optional[threading.Lock]) -> List[DiscoveredURL]:
+    """Same shared per-domain budget as _trim_to_domain_budget(), but for
+    run_direct_discovery()'s primary-discovery branch (_discover_single), which
+    operates on List[DiscoveredURL] rather than List[str] and already has
+    `domain` resolved in scope (from the parsed d_url) rather than needing it
+    re-derived per-candidate.
+
+    Fix for the gap documented in HANDOFF.md item #2: primary per-site
+    discovery (a profile-driven strategy.discover() call) was completely
+    uncapped by the budget mechanism that gates search_web()/SiteSearchDetector
+    - confirmed live, a single domain (newslivetv.com) returned 309 candidates
+    this way in one 61-source run. No-op (returns candidates unchanged) if the
+    budget dict/lock weren't supplied, or `domain` is falsy.
+    """
+    if domain_candidate_budget is None or domain_budget_lock is None or not candidates:
+        return candidates
+    if not domain:
+        return candidates
+    with domain_budget_lock:
+        used = domain_candidate_budget.get(domain, 0)
+        remaining = max(0, _MAX_CANDIDATES_PER_DOMAIN - used)
+        trimmed = candidates[:remaining] if remaining < len(candidates) else candidates
+        domain_candidate_budget[domain] = used + len(trimmed)
+    return trimmed
+
+
+def _fair_trim_candidates_across_domains(candidate_urls: List[str], max_candidates: int,
+                                          get_domain) -> List[str]:
+    """Fair, round-robin-across-domains trim of a combined, post-dedup
+    candidate_urls list down to max_candidates.
+
+    Fixes the sibling bug to the one _trim_to_domain_budget()/
+    _trim_discovered_to_domain_budget() address: even when every individual
+    domain's OWN contribution is within budget, _process_single_keyword's final
+    "Candidate cap" combines ALL domains' candidates for one keyword into a
+    single list before this trim runs. A naive candidate_urls[:max_candidates]
+    keeps whichever domains happen to appear earliest in list-insertion order
+    (primary discovery iterates raw_direct_urls in config/urls.json's source
+    order) or happen to have contributed the most - at 61-source scale this let
+    a handful of early/large domains crowd out every other domain's candidates
+    entirely for a keyword, even domains whose own per-domain count was
+    individually reasonable. Confirmed live (search_id=144): SiteSearchDetector
+    found substantial real candidate counts for dozens of domains, but only 9 of
+    61 domains ended up with ANY row in the final CrawledURL table for the whole
+    job (found=501, matched=0).
+
+    `get_domain` is injected (the caller's own already-defined get_domain(url)
+    closure) rather than re-implemented here, per the existing convention of not
+    duplicating that logic.
+
+    Extracted as a standalone, directly-testable helper rather than left inline,
+    so its fairness property (every domain gets at least one slot when
+    len(candidate_urls) > max_candidates and there are <= max_candidates
+    distinct domains) can be asserted directly in a unit test.
+    """
+    if len(candidate_urls) <= max_candidates:
+        return candidate_urls
+    from collections import defaultdict, deque
+    by_domain: Dict[str, Any] = defaultdict(deque)
+    for u in candidate_urls:  # preserve each domain's own original relative order
+        by_domain[get_domain(u)].append(u)
+    fair_trimmed: List[str] = []
+    domain_queues = list(by_domain.values())
+    while len(fair_trimmed) < max_candidates and domain_queues:
+        next_round = []
+        for q in domain_queues:
+            if not q:
+                continue
+            fair_trimmed.append(q.popleft())
+            if len(fair_trimmed) >= max_candidates:
+                break
+            next_round.append(q)
+        domain_queues = next_round
+    return fair_trimmed
+
 
 _QUERY_SNAPSHOT_FIELDS = (
     "id", "source_type", "direct_urls", "domains_filter", "engine",
@@ -1084,7 +1184,9 @@ def _process_single_keyword(
                 
                 temp_candidates, searched_domains = run_direct_discovery(
                     unique_raw_urls, query,
-                    keyword=(kw if kw.strip() and kw != "__config__" else None)
+                    keyword=(kw if kw.strip() and kw != "__config__" else None),
+                    domain_candidate_budget=domain_candidate_budget,
+                    domain_budget_lock=domain_budget_lock,
                 )
                 
                 site_search_urls = []
@@ -1282,12 +1384,16 @@ def _process_single_keyword(
         if domains_exclude:
             candidate_urls = [u for u in candidate_urls if not any(get_domain(u).endswith(d) for d in domains_exclude)]
 
-        # Candidate cap
+        # Candidate cap - fair, round-robin across domains (Fix B, see
+        # _fair_trim_candidates_across_domains's docstring for why a naive
+        # candidate_urls[:_max_candidates] silently starved most domains at
+        # 61-source scale).
         import os as _os3
         _max_candidates = int(_os3.environ.get("KS_MAX_CANDIDATE_URLS", "500"))
         if len(candidate_urls) > _max_candidates:
-            print(f"[Cap] Trimming {len(candidate_urls)} to {_max_candidates} for '{kw}'")
-            candidate_urls = candidate_urls[:_max_candidates]
+            print(f"[Cap] Trimming {len(candidate_urls)} to {_max_candidates} for '{kw}' "
+                  f"(fair, round-robin across domains)")
+            candidate_urls = _fair_trim_candidates_across_domains(candidate_urls, _max_candidates, get_domain)
 
         if not candidate_urls:
             if not crawl_only and mark_completed:
@@ -1694,6 +1800,16 @@ def process_search_query(search_id: int):
             except Exception as e:
                 print(f"Error parsing languages_filter: {e}")
 
+        # Shared, cross-keyword, cross-thread cap on how many candidates a single
+        # domain can contribute - across the WHOLE job - via any discovery
+        # mechanism (site-restricted web search, SiteSearchDetector, AND primary
+        # per-site discovery below). See _MAX_CANDIDATES_PER_DOMAIN's definition
+        # for why this exists. Created here (before the pre-discovery call) so
+        # run_direct_discovery()'s keyword-independent pre-discovery pass draws
+        # from the same shared budget as every per-keyword call later in this job.
+        domain_candidate_budget: Dict[str, int] = {}
+        domain_budget_lock = threading.Lock()
+
         # Pre-discover keyword-independent candidate URLs if source_type == "direct" or sitemap/feed
         pre_discovered_candidates = None
         pre_discovered_domains = None
@@ -1702,7 +1818,11 @@ def process_search_query(search_id: int):
             raw_direct_urls = [line.strip() for line in (query.direct_urls or "").split("\n") if line.strip()]
             unique_raw_urls = list(dict.fromkeys(raw_direct_urls))
             print(f"[Direct Discovery] Running keyword-independent discovery for {len(unique_raw_urls)} unique URLs...")
-            pre_discovered_candidates, pre_discovered_domains = run_direct_discovery(unique_raw_urls, query_ro)
+            pre_discovered_candidates, pre_discovered_domains = run_direct_discovery(
+                unique_raw_urls, query_ro,
+                domain_candidate_budget=domain_candidate_budget,
+                domain_budget_lock=domain_budget_lock,
+            )
         elif query.source_type == "sitemap":
             from backend.sitemap_discovery import discover_from_sitemap
             base_url = (query.direct_urls or "").strip().splitlines()[0].strip()
@@ -1732,11 +1852,10 @@ def process_search_query(search_id: int):
         # Keywords are independent; run them concurrently to eliminate N×serial cost.
         # Shared dedup state is protected by seen_lock.
         seen_lock = threading.Lock()
-        # Shared, cross-keyword, cross-thread cap on how many candidates a single
-        # domain can contribute via site-restricted web search across the WHOLE
-        # job - see _MAX_CANDIDATES_PER_DOMAIN's definition for why this exists.
-        domain_candidate_budget: Dict[str, int] = {}
-        domain_budget_lock = threading.Lock()
+        # domain_candidate_budget/domain_budget_lock were already created above,
+        # before the pre-discovery call, so run_direct_discovery()'s
+        # keyword-independent pass shares the same budget as every per-keyword
+        # call below.
         import os
         _kw_max_workers = min(len(keywords_list), int(
             os.environ.get("KS_MAX_KEYWORD_WORKERS", "8")
