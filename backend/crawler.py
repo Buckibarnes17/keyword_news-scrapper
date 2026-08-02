@@ -1038,7 +1038,20 @@ class Crawler:
             return _re.findall(r'\(|\)|"[^"]+"|\bAND\b|\bOR\b|\bNOT\b|\S+', q, _re.IGNORECASE)
         def term_matches(term):
             t = term.strip('"')
-            return t in text if case_sensitive else t.lower() in text.lower()
+            haystack = text if case_sensitive else text.lower()
+            needle = t if case_sensitive else t.lower()
+            # Route through the same hyphen/dash/whitespace normalization as
+            # count_term_occurrences()'s substring path (see
+            # _normalize_for_substring_match()) so a boolean query term like
+            # "Pakistan occupied Kashmir" also matches text containing
+            # "Pakistan-occupied Kashmir" - previously this nested function
+            # did plain substring comparison, independent of and inconsistent
+            # with phrase-mode matching.
+            haystack = _normalize_for_substring_match(haystack)
+            needle = _normalize_for_substring_match(needle)
+            if not needle.strip():
+                return False
+            return needle in haystack
         tokens = tokenize(query)
         pos = [0]
         def peek(): return tokens[pos[0]] if pos[0] < len(tokens) else None

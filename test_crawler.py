@@ -816,6 +816,87 @@ def test_substring_match_ignores_hyphen_punctuation():
     ) == 0
 
 
+def test_boolean_query_ignores_hyphen_punctuation():
+    """
+    Part 1 fix: evaluate_boolean_query()'s own inner term_matches() used to do
+    plain substring comparison, completely independent of
+    _normalize_for_substring_match()/count_term_occurrences(). A boolean query
+    like '"Pakistan occupied Kashmir"' (space) never matched real text spelled
+    "Pakistan-occupied Kashmir" (hyphen), and vice versa. Confirms both
+    directions now match, routed through the same normalization as phrase mode.
+    """
+    from backend.crawler import Crawler as _Crawler
+
+    text_hyphenated = "Reports describe Pakistan-occupied Kashmir protests intensifying this week."
+    text_spaced = "Reports describe Pakistan occupied Kashmir protests intensifying this week."
+
+    # Query spelled with spaces must match text spelled with a hyphen.
+    assert _Crawler.evaluate_boolean_query(
+        text_hyphenated, '"Pakistan occupied Kashmir"', case_sensitive=False
+    ) is True, "spaced boolean term should match hyphenated text"
+
+    # Query spelled with a hyphen must match text spelled with spaces.
+    assert _Crawler.evaluate_boolean_query(
+        text_spaced, '"Pakistan-occupied Kashmir"', case_sensitive=False
+    ) is True, "hyphenated boolean term should match spaced text"
+
+    # Sanity: an unrelated phrase must still not match.
+    assert _Crawler.evaluate_boolean_query(
+        text_spaced, '"Azad Kashmir"', case_sensitive=False
+    ) is False
+
+
+def test_single_word_boolean_query_matches_phrase_mode():
+    """
+    Part 2 verification: a bare single-word boolean query (no AND/OR/NOT/
+    quotes) should behave identically to match_type="phrase" for the same
+    term, since it parses to a single parse_atom() -> term_matches() call.
+    This matters because the production run switches simple keywords like
+    "china"/"myanmar"/"india"/"pakistan" from phrase mode to boolean mode
+    for the whole SearchQuery - confirmed here with a real fixture/analysis
+    run rather than just trusting a read of the parser.
+    """
+    html = """
+    <html>
+      <head><title>China's Economic Outlook</title></head>
+      <body><p>Analysts discussed China's growth prospects and trade policy
+      with neighboring countries this week.</p></body>
+    </html>
+    """
+    html_no_match = """
+    <html>
+      <head><title>Local Weather Report</title></head>
+      <body><p>Rain is expected across the region for the rest of the week.</p></body>
+    </html>
+    """
+    crawler = Crawler()
+
+    for content, expect_match in ((html, True), (html_no_match, False)):
+        phrase_result = crawler.analyze_page(
+            html_content=content,
+            url="https://example.com/news/story",
+            keyword="china",
+            match_type="phrase",
+            case_sensitive=False,
+            exact_match=False,
+        )
+        boolean_result = crawler.analyze_page(
+            html_content=content,
+            url="https://example.com/news/story",
+            keyword="china",
+            match_type="boolean",
+            case_sensitive=False,
+            exact_match=False,
+        )
+        assert phrase_result["matched"] is expect_match, (
+            f"phrase mode matched={phrase_result['matched']}, expected {expect_match}"
+        )
+        assert boolean_result["matched"] == phrase_result["matched"], (
+            "single-word boolean query must match identically to phrase mode: "
+            f"boolean={boolean_result['matched']} phrase={phrase_result['matched']}"
+        )
+
+
 if __name__ == "__main__":
     try:
         run_tests()
