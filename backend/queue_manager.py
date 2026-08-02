@@ -21,6 +21,7 @@ import re
 import threading
 import json
 import os
+import multiprocessing
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Set, Tuple, Any, Optional
 from urllib.parse import urlparse, urljoin
@@ -28,6 +29,7 @@ import xml.etree.ElementTree as ET
 from sqlalchemy.orm import Session
 from sqlalchemy import update, select, func
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
+from concurrent.futures.process import BrokenProcessPool
 
 from backend.database import SessionLocal
 from backend.models import SearchQuery, CrawledURL, KeywordProgress
@@ -65,6 +67,99 @@ _shared_process_stop_event = threading.Event()
 _CRAWL_CONCURRENCY_SEMAPHORE = threading.BoundedSemaphore(
     int(os.environ.get("KS_MAX_CONCURRENT_CRAWLS", "25"))
 )
+
+# ── Phase 1: process pool for Crawler._analyze_page_impl (CPU-bound analysis) ──
+# analyze_page() (HTML re-parsing x2-3, language classification, trafilatura
+# metadata) is 100% CPU-bound with zero network I/O - confirmed by reading the
+# method body - and was identified as a strong candidate for the dominant GIL
+# contention source under this module's ThreadPoolExecutor-based crawl pipeline
+# (threads doing a mix of network I/O and CPU-bound work can't get real
+# parallelism on CPU work under the GIL). Offloading it to a ProcessPoolExecutor
+# gets true parallelism across this host's many real cores. See
+# crawl_url_task()'s analysis call site for how this is used, and
+# backend/crawler.py's `_analyze_page_impl` (module-level, picklable by
+# reference - required since ProcessPoolExecutor can't pickle bound methods)
+# for the function being offloaded.
+_ANALYSIS_POOL: Optional[ProcessPoolExecutor] = None
+_ANALYSIS_POOL_LOCK = threading.Lock()
+# Conservative default (12, not the full 48-core host) - each worker process
+# imports trafilatura + py3langid (+ optionally selenium/playwright at module
+# import time), a real memory floor per process. Tune up only from measured
+# Phase 0/1 data, not guessed at the host's full core count upfront.
+_ANALYSIS_POOL_WORKERS = int(os.environ.get("KS_ANALYSIS_POOL_WORKERS", "12"))
+# Recycle workers periodically (Python 3.12 feature). ProcessPoolExecutor
+# futures cannot be force-cancelled once running, so a single pathological
+# hang (e.g. a page that sends trafilatura into a bad regex-backtracking case)
+# would otherwise permanently consume one worker for the rest of the process's
+# lifetime. 50 tasks/worker bounds that damage without recycling so often that
+# per-worker import cost (trafilatura/py3langid) dominates.
+_ANALYSIS_POOL_MAX_TASKS_PER_CHILD = int(os.environ.get("KS_ANALYSIS_POOL_MAX_TASKS_PER_CHILD", "50"))
+# Bound on how long we wait for a single analysis result before treating it
+# like any other analysis failure (existing "Parsing Error" path in
+# crawl_url_task - no new failure semantics). Comfortably under the 120s crawl
+# watchdog, leaving room for the fetch phase that already happened.
+_ANALYSIS_RESULT_TIMEOUT_S = float(os.environ.get("KS_ANALYSIS_TIMEOUT_S", "60"))
+
+
+def _get_analysis_pool() -> ProcessPoolExecutor:
+    """
+    Lazily creates (or returns the existing) module-level ProcessPoolExecutor
+    used to offload Crawler._analyze_page_impl. Uses multiprocessing's "spawn"
+    start method explicitly - NOT the platform default (fork on Linux) -
+    because this parent process holds live resources (SQLAlchemy engine
+    connection pool, Selenium/webdriver state, VPN/Tor router state) that must
+    not be duplicated into a child via fork()'s copy-on-write semantics; spawn
+    starts each worker as a fresh interpreter that only imports what it needs.
+    """
+    global _ANALYSIS_POOL
+    with _ANALYSIS_POOL_LOCK:
+        if _ANALYSIS_POOL is None:
+            ctx = multiprocessing.get_context("spawn")
+            _ANALYSIS_POOL = ProcessPoolExecutor(
+                max_workers=_ANALYSIS_POOL_WORKERS,
+                mp_context=ctx,
+                max_tasks_per_child=_ANALYSIS_POOL_MAX_TASKS_PER_CHILD,
+            )
+        return _ANALYSIS_POOL
+
+
+def _reset_analysis_pool() -> None:
+    """Tears down a broken analysis pool so the next _get_analysis_pool() call
+    creates a fresh one. Called after a BrokenProcessPoolError so subsequent
+    tasks don't keep hitting the same dead pool."""
+    global _ANALYSIS_POOL
+    with _ANALYSIS_POOL_LOCK:
+        pool, _ANALYSIS_POOL = _ANALYSIS_POOL, None
+    if pool is not None:
+        try:
+            pool.shutdown(wait=False, cancel_futures=True)
+        except Exception:
+            pass
+
+
+def _run_analysis(html_content: str, url: str, keyword: str, match_type: str,
+                   case_sensitive: bool, exact_match: bool) -> Dict[str, Any]:
+    """
+    Runs Crawler._analyze_page_impl (CPU-bound HTML/keyword analysis) in the
+    shared analysis process pool, bypassing the GIL for real parallelism.
+    Falls back to an in-thread synchronous call for THIS task only if the pool
+    itself is broken (e.g. a worker crashed hard) - the pool is recreated so
+    later tasks get a working pool again, rather than losing work.
+    """
+    from backend.crawler import _analyze_page_impl
+    try:
+        pool = _get_analysis_pool()
+        future = pool.submit(
+            _analyze_page_impl, html_content, url, keyword, match_type, case_sensitive, exact_match
+        )
+        return future.result(timeout=_ANALYSIS_RESULT_TIMEOUT_S)
+    except BrokenProcessPool as bppe:
+        print(f"[AnalysisPool] Pool broken ({bppe}); recreating and falling back to "
+              f"in-thread analysis for this task only.")
+        _reset_analysis_pool()
+        return _analyze_page_impl(html_content, url, keyword, match_type, case_sensitive, exact_match)
+
+
 # Per-domain locks for _reserve_domain_slot()'s slot-reservation critical section -
 # separate from _shared_domain_lock, which now only guards brief get-or-create of
 # an entry here. See _reserve_domain_slot()'s docstring for why.
@@ -431,12 +526,18 @@ def crawl_url_task(
         _sem_acquired = True
 
         crawler = Crawler(proxy_url=proxy_url)
-        
+
         # 2. Fetch page with retries (up to 2 retries, exponential backoff)
         max_retries = 2
         retry_delay = 1.0
         html_content = ""
-        
+
+        # Phase 0 instrumentation: measure fetch-wait-time (network I/O, including
+        # retry backoff sleeps) separately from analysis-time (CPU-bound HTML
+        # parsing/classification) so the two can be compared without conflating
+        # them - see _run_analysis()/_get_analysis_pool() above for why this
+        # split matters (only analysis is CPU-bound and thus GIL-contending).
+        _fetch_start = time.perf_counter()
         for attempt in range(max_retries):
             if check_stopped():
                 result = {"status": "skipped", "error_message": "Job aborted by user."}
@@ -450,7 +551,7 @@ def crawl_url_task(
                 break
             except Exception as e:
                 result["error_message"] = str(e)
-                
+
                 # Check if it is a non-retryable HTTP status code
                 is_retryable = True
                 # Check if exception has response attribute (indicating an HTTPError)
@@ -459,28 +560,35 @@ def crawl_url_task(
                     status_code = getattr(response, "status_code", None)
                     if status_code in (404, 410, 401, 403):
                         is_retryable = False
-                
+
                 if is_retryable and attempt < max_retries - 1:
                     time.sleep(retry_delay)
                     retry_delay *= 2  # Double delay (4s, 8s)
                 else:
                     result["status"] = "failed"
                     break
-                    
+        fetch_s = time.perf_counter() - _fetch_start
+
         crawler.close()
-        
+
         # 3. Analyze page content if fetch was successful
         if html_content:
             try:
                 effective_keyword = "" if keyword == "__config__" else keyword
-                analysis = crawler.analyze_page(
-                    html_content=html_content,
-                    url=url,
-                    keyword=effective_keyword,
-                    match_type=match_type,
-                    case_sensitive=case_sensitive,
-                    exact_match=exact_match
+                # Phase 1: offload the CPU-bound analysis to a ProcessPoolExecutor
+                # instead of calling crawler.analyze_page(...) in-thread - see
+                # _run_analysis()'s docstring above. analyze_s below includes the
+                # pool round-trip (submit + IPC serialization + .result() wait),
+                # not just raw compute time, since that round-trip cost is itself
+                # part of what Phase 0/1 needs to measure (raw_html/full_content
+                # are large strings crossing the process boundary both ways).
+                _analyze_start = time.perf_counter()
+                analysis = _run_analysis(
+                    html_content, url, effective_keyword, match_type, case_sensitive, exact_match
                 )
+                analyze_s = time.perf_counter() - _analyze_start
+                print(f"[CrawlTiming] url_id={url_id} domain={domain} "
+                      f"fetch_s={fetch_s:.3f} analyze_s={analyze_s:.3f}")
                 result.update(analysis)
                 # If matched, status is "matched", else "skipped"
                 result["status"] = "matched" if analysis["matched"] else "skipped"
@@ -535,7 +643,13 @@ def crawl_url_task(
             except Exception as e:
                 result["status"] = "failed"
                 result["error_message"] = f"Parsing Error: {str(e)}"
-                
+        else:
+            # Fetch never produced content (failed/skipped/aborted) - still log
+            # fetch_s so Phase 0 aggregation isn't biased toward only-successful
+            # fetches; analyze_s is naturally absent since analysis never ran.
+            print(f"[CrawlTiming] url_id={url_id} domain={domain} "
+                  f"fetch_s={fetch_s:.3f} analyze_s=NA")
+
     finally:
         if _sem_acquired:
             _CRAWL_CONCURRENCY_SEMAPHORE.release()

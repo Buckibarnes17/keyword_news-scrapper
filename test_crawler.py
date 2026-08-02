@@ -686,13 +686,19 @@ def test_default_date_filter():
     mock_analysis_new["content_hash"] = "hash_new"
     
     with patch("backend.queue_manager.SessionLocal", return_value=mock_db), \
-         patch("backend.queue_manager.Crawler") as mock_crawler_cls:
-         
+         patch("backend.queue_manager.Crawler") as mock_crawler_cls, \
+         patch("backend.queue_manager._run_analysis") as mock_run_analysis:
+         # NOTE: crawl_url_task's analysis call site now goes through
+         # backend.queue_manager._run_analysis (Phase 1: offloaded to a
+         # ProcessPoolExecutor) instead of calling crawler.analyze_page(...)
+         # directly - mock that function instead of Crawler.analyze_page so
+         # this test controls what "analysis" returns, same as before.
+
         mock_crawler = mock_crawler_cls.return_value
         mock_crawler.fetch_page.return_value = "<html>Mock HTML</html>"
-        
+
         # Test old article (100 days ago) - should be skipped
-        mock_crawler.analyze_page.return_value = mock_analysis_old
+        mock_run_analysis.return_value = mock_analysis_old
         url_id, result = crawl_url_task(
             url_id=1,
             search_id=1,
@@ -708,7 +714,7 @@ def test_default_date_filter():
         assert "before date_range_start" in result["error_message"]
         
         # Test new article (10 days ago) - should be matched
-        mock_crawler.analyze_page.return_value = mock_analysis_new
+        mock_run_analysis.return_value = mock_analysis_new
         url_id, result = crawl_url_task(
             url_id=2,
             search_id=1,
@@ -724,7 +730,7 @@ def test_default_date_filter():
         
         # Test old article (100 days ago) with explicit date_range_start of 120 days ago - should be matched
         date_120_days_ago = datetime.now(timezone.utc) - timedelta(days=120)
-        mock_crawler.analyze_page.return_value = mock_analysis_old
+        mock_run_analysis.return_value = mock_analysis_old
         url_id, result = crawl_url_task(
             url_id=3,
             search_id=1,

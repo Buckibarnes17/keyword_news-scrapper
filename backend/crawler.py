@@ -848,7 +848,8 @@ class Crawler:
         normalized = " ".join(text.lower().split())
         return hashlib.md5(normalized.encode("utf-8")).hexdigest()
 
-    def generate_snippet(self, text: str, terms: Set[str], context_words: int = 20) -> str:
+    @staticmethod
+    def generate_snippet(text: str, terms: Set[str], context_words: int = 20) -> str:
         """Generates a snippet highlighting the keyword."""
         # Find first term occurrence
         normalized_text = " ".join(text.split())
@@ -887,7 +888,8 @@ class Crawler:
             
         return snippet
 
-    def evaluate_boolean_query(self, text: str, query: str, case_sensitive: bool = False) -> bool:
+    @staticmethod
+    def evaluate_boolean_query(text: str, query: str, case_sensitive: bool = False) -> bool:
         """
         Parses and evaluates a Boolean search expression on text using a recursive descent parser.
         Supports AND, OR, NOT, and parentheses.
@@ -936,236 +938,274 @@ class Crawler:
         """
         Analyzes page contents for keyword matches, generates statistics,
         snippet, metadata, and calculates relevance score.
+
+        Delegates to the module-level `_analyze_page_impl`, which is a pure
+        function of its arguments (no live Crawler instance state - all of
+        its helper calls are @staticmethods). Kept as a thin wrapper so this
+        remains the stable call site for every existing caller (including
+        test_crawler.py); the extraction exists so backend/queue_manager.py
+        can submit `_analyze_page_impl` directly to a ProcessPoolExecutor
+        (module-level functions are picklable by reference, bound methods
+        are not).
         """
-        soup = BeautifulSoup(html_content, "html.parser")
-        
-        # 1. Gather page metadata
-        title = ""
-        if soup.title:
-            title_text = soup.title.get_text()
-            if title_text:
-                title = title_text.strip()
-        
-        meta_desc_tag = (
-            soup.find("meta", attrs={"name": "description"}) or 
-            soup.find("meta", attrs={"property": "og:description"})
+        return _analyze_page_impl(
+            html_content, url, keyword, match_type, case_sensitive, exact_match
         )
-        description = ""
-        if meta_desc_tag:
-            desc_content = meta_desc_tag.get("content")
-            if desc_content:
-                if isinstance(desc_content, list):
-                    desc_content = " ".join(desc_content)
-                description = str(desc_content).strip()
-        
-        from backend.firecrawl_converter import convert_html_to_firecrawl_schema
-        normalized_data = convert_html_to_firecrawl_schema(html_content, url, soup=soup)
-        markdown_content = normalized_data["data"]["markdown"]
-        
-        body_text = self.clean_html_content(soup, html_content=html_content)
-        language = self.detect_language(soup, body_text)
-        pub_date = self.detect_date(soup)
-        content_hash = self.calculate_content_hash(body_text)
-        author = self.extract_author(soup)
-        image_url = self.extract_image_url(soup, url)
 
-        # Enrich metadata using Trafilatura if possible
+
+def _analyze_page_impl(
+    html_content: str,
+    url: str,
+    keyword: str,
+    match_type: str = "phrase",
+    case_sensitive: bool = False,
+    exact_match: bool = False
+) -> Dict[str, Any]:
+    """
+    Module-level implementation of Crawler.analyze_page's body (see that
+    method's docstring for why this was extracted). Analyzes page contents
+    for keyword matches, generates statistics, snippet, metadata, and
+    calculates relevance score. 100% CPU-bound, zero network I/O, no
+    dependency on any Crawler instance - safe to run in a worker process.
+    """
+    soup = BeautifulSoup(html_content, "html.parser")
+
+    # 1. Gather page metadata
+    title = ""
+    if soup.title:
+        title_text = soup.title.get_text()
+        if title_text:
+            title = title_text.strip()
+
+    meta_desc_tag = (
+        soup.find("meta", attrs={"name": "description"}) or
+        soup.find("meta", attrs={"property": "og:description"})
+    )
+    description = ""
+    if meta_desc_tag:
+        desc_content = meta_desc_tag.get("content")
+        if desc_content:
+            if isinstance(desc_content, list):
+                desc_content = " ".join(desc_content)
+            description = str(desc_content).strip()
+
+    from backend.firecrawl_converter import convert_html_to_firecrawl_schema
+    normalized_data = convert_html_to_firecrawl_schema(html_content, url, soup=soup)
+    markdown_content = normalized_data["data"]["markdown"]
+
+    body_text = Crawler.clean_html_content(soup, html_content=html_content)
+    language = Crawler.detect_language(soup, body_text)
+    pub_date = Crawler.detect_date(soup)
+    content_hash = Crawler.calculate_content_hash(body_text)
+    author = Crawler.extract_author(soup)
+    image_url = Crawler.extract_image_url(soup, url)
+
+    # Enrich metadata using Trafilatura if possible
+    try:
+        if _TRAFILATURA_AVAILABLE:
+            traf_meta = _traf_extract_metadata(html_content)
+        else:
+            traf_meta = None
+        if traf_meta:
+            # Enrich author if existing extraction returned "Unknown"
+            if (not author or author == "Unknown") and traf_meta.author:
+                author = str(traf_meta.author)[:100]
+            # Enrich title if empty
+            if not title and traf_meta.title:
+                title = str(traf_meta.title)[:200]
+            # Enrich description if empty
+            if not description and traf_meta.description:
+                description = str(traf_meta.description)
+            # Enrich pub_date if not found by existing parser
+            if not pub_date and traf_meta.date:
+                try:
+                    # BUGFIX: Return timezone-aware datetime to avoid offset-naive vs offset-aware comparison errors.
+                    pub_date = datetime.strptime(str(traf_meta.date)[:10], "%Y-%m-%d").replace(tzinfo=timezone.utc)
+                except Exception:
+                    pass
+    except Exception:
+        pass  # Metadata enrichment is best-effort, never block the pipeline
+
+    # Compute SimHash fingerprint
+    from backend.simhash_dedup import compute_simhash
+    simhash_val = compute_simhash(body_text)
+
+    
+    # 2. Extract domain and check URL keyword presence
+    parsed_url = urllib.parse.urlparse(url)
+    domain = parsed_url.netloc.lower()
+    if domain.startswith("www."):
+        domain = domain[4:]
+        
+    # 3. Analyze Keyword Match
+    matched = False
+    total_occurrences = 0
+    found_in_title = False
+    found_in_description = False
+    found_in_body = False
+    found_in_url = False
+    
+    # Prepare list of search terms
+    is_keyword_free = not keyword or not keyword.strip()
+    
+    search_terms_list = []
+    if not is_keyword_free:
         try:
-            if _TRAFILATURA_AVAILABLE:
-                traf_meta = _traf_extract_metadata(html_content)
+            # Check if keyword is a JSON list
+            parsed_json = json.loads(keyword)
+            if isinstance(parsed_json, list):
+                search_terms_list = [str(k).strip() for k in parsed_json if str(k).strip()]
             else:
-                traf_meta = None
-            if traf_meta:
-                # Enrich author if existing extraction returned "Unknown"
-                if (not author or author == "Unknown") and traf_meta.author:
-                    author = str(traf_meta.author)[:100]
-                # Enrich title if empty
-                if not title and traf_meta.title:
-                    title = str(traf_meta.title)[:200]
-                # Enrich description if empty
-                if not description and traf_meta.description:
-                    description = str(traf_meta.description)
-                # Enrich pub_date if not found by existing parser
-                if not pub_date and traf_meta.date:
-                    try:
-                        # BUGFIX: Return timezone-aware datetime to avoid offset-naive vs offset-aware comparison errors.
-                        pub_date = datetime.strptime(str(traf_meta.date)[:10], "%Y-%m-%d").replace(tzinfo=timezone.utc)
-                    except Exception:
-                        pass
+                search_terms_list = [str(parsed_json).strip()]
         except Exception:
-            pass  # Metadata enrichment is best-effort, never block the pipeline
+            # If not JSON, check if it's comma-separated or newline-separated
+            if "," in keyword or "\n" in keyword:
+                search_terms_list = [k.strip() for k in re.split(r'[,\n]', keyword) if k.strip()]
+            else:
+                search_terms_list = [keyword.strip()]
+        search_terms_list = list(dict.fromkeys(search_terms_list))
 
-        # Compute SimHash fingerprint
-        from backend.simhash_dedup import compute_simhash
-        simhash_val = compute_simhash(body_text)
-
-        
-        # 2. Extract domain and check URL keyword presence
-        parsed_url = urllib.parse.urlparse(url)
-        domain = parsed_url.netloc.lower()
-        if domain.startswith("www."):
-            domain = domain[4:]
-            
-        # 3. Analyze Keyword Match
-        matched = False
+    # Check locations and count occurrences
+    if is_keyword_free:
+        matched = True
         total_occurrences = 0
         found_in_title = False
         found_in_description = False
         found_in_body = False
         found_in_url = False
-        
-        # Prepare list of search terms
-        is_keyword_free = not keyword or not keyword.strip()
-        
-        search_terms_list = []
-        if not is_keyword_free:
-            try:
-                # Check if keyword is a JSON list
-                parsed_json = json.loads(keyword)
-                if isinstance(parsed_json, list):
-                    search_terms_list = [str(k).strip() for k in parsed_json if str(k).strip()]
+        matched_keywords_found = []
+        search_terms = set()
+    else:
+        search_terms = set(search_terms_list)
+        if match_type == "boolean":
+            # Extract plain terms from boolean expression (words/phrases in quotes or alphanumeric)
+            search_terms = set(re.findall(r'"([^"]+)"|(\b\w+\b)', keyword))
+            # Flatten tuples from findall
+            search_terms = {t[0] or t[1] for t in search_terms if t[0] or t[1]}
+            search_terms = {t for t in search_terms if t.upper() not in ("AND", "OR", "NOT")}
+            
+        # Count occurrences in each location
+        def count_occurrences(text_content: str, terms: Set[str]) -> int:
+            count = 0
+            for term in terms:
+                if exact_match:
+                    # Match exact words using regex word boundaries
+                    pattern = rf"\b{re.escape(term)}\b"
+                    flags = 0 if case_sensitive else re.IGNORECASE
+                    count += len(re.findall(pattern, text_content, flags))
                 else:
-                    search_terms_list = [str(parsed_json).strip()]
-            except Exception:
-                # If not JSON, check if it's comma-separated or newline-separated
-                if "," in keyword or "\n" in keyword:
-                    search_terms_list = [k.strip() for k in re.split(r'[,\n]', keyword) if k.strip()]
-                else:
-                    search_terms_list = [keyword.strip()]
-            search_terms_list = list(dict.fromkeys(search_terms_list))
-
-        # Check locations and count occurrences
-        if is_keyword_free:
-            matched = True
-            total_occurrences = 0
-            found_in_title = False
-            found_in_description = False
-            found_in_body = False
-            found_in_url = False
-            matched_keywords_found = []
-            search_terms = set()
-        else:
-            search_terms = set(search_terms_list)
-            if match_type == "boolean":
-                # Extract plain terms from boolean expression (words/phrases in quotes or alphanumeric)
-                search_terms = set(re.findall(r'"([^"]+)"|(\b\w+\b)', keyword))
-                # Flatten tuples from findall
-                search_terms = {t[0] or t[1] for t in search_terms if t[0] or t[1]}
-                search_terms = {t for t in search_terms if t.upper() not in ("AND", "OR", "NOT")}
-                
-            # Count occurrences in each location
-            def count_occurrences(text_content: str, terms: Set[str]) -> int:
-                count = 0
-                for term in terms:
-                    if exact_match:
-                        # Match exact words using regex word boundaries
-                        pattern = rf"\b{re.escape(term)}\b"
-                        flags = 0 if case_sensitive else re.IGNORECASE
-                        count += len(re.findall(pattern, text_content, flags))
+                    # Match substrings
+                    if case_sensitive:
+                        count += text_content.count(term)
                     else:
-                        # Match substrings
-                        if case_sensitive:
-                            count += text_content.count(term)
-                        else:
-                            count += text_content.lower().count(term.lower())
-                return count
+                        count += text_content.lower().count(term.lower())
+            return count
 
-            found_in_url = count_occurrences(url, search_terms) > 0
-            
-            title_count = count_occurrences(title, search_terms)
-            found_in_title = title_count > 0
-            
-            desc_count = count_occurrences(description, search_terms)
-            found_in_description = desc_count > 0
-            
-            body_count = count_occurrences(body_text, search_terms)
-            found_in_body = body_count > 0
-            
-            total_occurrences = title_count + desc_count + body_count + (1 if found_in_url else 0)
-
-            # Track which specific keywords matched
-            matched_keywords_found = []
-            for term in (search_terms if match_type == "boolean" else search_terms_list):
-                term_set = {term}
-                if (count_occurrences(url, term_set) > 0 or 
-                    count_occurrences(title, term_set) > 0 or 
-                    count_occurrences(description, term_set) > 0 or 
-                    count_occurrences(body_text, term_set) > 0):
-                    matched_keywords_found.append(term)
-            
-            # Evaluate boolean query matching if match_type is boolean
-            if match_type == "boolean":
-                # We check the entire full text combining title, description, body, url
-                full_crawlable_text = f"{title}\n{description}\n{body_text}\n{url}"
-                matched = self.evaluate_boolean_query(full_crawlable_text, keyword, case_sensitive)
-            else:
-                # Require that at least one searched keyword is found in the parsed content (OR logic)
-                matched = len(matched_keywords_found) > 0
-
-
-        # 4. Snippet Generation
-        snippet = ""
-        if matched:
-            if is_keyword_free:
-                normalized_text = " ".join(body_text.split())
-                snippet = normalized_text[:150] + "..." if len(normalized_text) > 150 else normalized_text
-            else:
-                snippet = self.generate_snippet(body_text, search_terms)
-            
-        # 5. Relevance Scoring (0-100)
-        relevance_score = 0.0
-        if matched:
-            if is_keyword_free:
-                relevance_score = 100.0
-            else:
-                # Weights: Title (35pts), Description (15pts), URL (10pts), Body density (40pts)
-                if found_in_title:
-                    relevance_score += 35
-                if found_in_description:
-                    relevance_score += 15
-                if found_in_url:
-                    relevance_score += 10
-                    
-                # Density score (up to 40pts)
-                words = body_text.split()
-                word_count = len(words)
-                if word_count > 0 and body_count > 0:
-                    density = body_count / word_count
-                    # Peak density is 2% = full 40 points
-                    density_score = min(40.0, density * 2000.0)
-                    relevance_score += density_score
-                    
-                relevance_score = round(relevance_score, 1)
-
-        # 6. Extract full images and videos list
-        images_list = normalized_data.get("data", {}).get("images", [])
-        videos_list = normalized_data.get("data", {}).get("videos", [])
+        found_in_url = count_occurrences(url, search_terms) > 0
         
-        image_links_json = json.dumps([img["src"] for img in images_list if img.get("src")])
-        video_links_json = json.dumps([v["src"] for v in videos_list if v.get("src")])
+        title_count = count_occurrences(title, search_terms)
+        found_in_title = title_count > 0
+        
+        desc_count = count_occurrences(description, search_terms)
+        found_in_description = desc_count > 0
+        
+        body_count = count_occurrences(body_text, search_terms)
+        found_in_body = body_count > 0
+        
+        total_occurrences = title_count + desc_count + body_count + (1 if found_in_url else 0)
 
-        return {
-            "title": title[:200] if title else "Untitled",
-            "snippet": snippet,
-            "occurrences": total_occurrences,
-            "found_in_title": found_in_title,
-            "found_in_description": found_in_description,
-            "found_in_body": found_in_body,
-            "found_in_url": found_in_url,
-            "language": language,
-            "discovered_at": pub_date or datetime.now(timezone.utc),
-            "domain": domain,
-            "content_hash": content_hash,
-            "description": description,
-            "full_content": markdown_content,
-            "raw_html": html_content,
-            "author": author[:100] if author else "Unknown",
-            "simhash": simhash_val,
+        # Track which specific keywords matched
+        matched_keywords_found = []
+        # NOTE: search_terms is a set (built via re.findall for boolean mode),
+        # so its iteration order depends on Python's per-process string hash
+        # seed (randomized by default). Sorting here is a deterministic-output
+        # fix, not a behavior change - it doesn't affect *which* keywords are
+        # found, only the order they're serialized in - but it matters now
+        # that analysis can run in a separate worker process (Phase 1) with a
+        # different hash seed than the caller, which would otherwise make
+        # matched_keywords ordering silently vary run-to-run for boolean
+        # queries with 2+ matched terms.
+        for term in (sorted(search_terms) if match_type == "boolean" else search_terms_list):
+            term_set = {term}
+            if (count_occurrences(url, term_set) > 0 or 
+                count_occurrences(title, term_set) > 0 or 
+                count_occurrences(description, term_set) > 0 or 
+                count_occurrences(body_text, term_set) > 0):
+                matched_keywords_found.append(term)
+        
+        # Evaluate boolean query matching if match_type is boolean
+        if match_type == "boolean":
+            # We check the entire full text combining title, description, body, url
+            full_crawlable_text = f"{title}\n{description}\n{body_text}\n{url}"
+            matched = Crawler.evaluate_boolean_query(full_crawlable_text, keyword, case_sensitive)
+        else:
+            # Require that at least one searched keyword is found in the parsed content (OR logic)
+            matched = len(matched_keywords_found) > 0
 
-            "image_url": image_url,
-            "image_links": image_links_json,
-            "video_links": video_links_json,
-            "relevance_score": relevance_score,
-            "matched": matched,
-            "matched_keywords": json.dumps(matched_keywords_found)
-        }
+
+    # 4. Snippet Generation
+    snippet = ""
+    if matched:
+        if is_keyword_free:
+            normalized_text = " ".join(body_text.split())
+            snippet = normalized_text[:150] + "..." if len(normalized_text) > 150 else normalized_text
+        else:
+            snippet = Crawler.generate_snippet(body_text, search_terms)
+        
+    # 5. Relevance Scoring (0-100)
+    relevance_score = 0.0
+    if matched:
+        if is_keyword_free:
+            relevance_score = 100.0
+        else:
+            # Weights: Title (35pts), Description (15pts), URL (10pts), Body density (40pts)
+            if found_in_title:
+                relevance_score += 35
+            if found_in_description:
+                relevance_score += 15
+            if found_in_url:
+                relevance_score += 10
+                
+            # Density score (up to 40pts)
+            words = body_text.split()
+            word_count = len(words)
+            if word_count > 0 and body_count > 0:
+                density = body_count / word_count
+                # Peak density is 2% = full 40 points
+                density_score = min(40.0, density * 2000.0)
+                relevance_score += density_score
+                
+            relevance_score = round(relevance_score, 1)
+
+    # 6. Extract full images and videos list
+    images_list = normalized_data.get("data", {}).get("images", [])
+    videos_list = normalized_data.get("data", {}).get("videos", [])
+    
+    image_links_json = json.dumps([img["src"] for img in images_list if img.get("src")])
+    video_links_json = json.dumps([v["src"] for v in videos_list if v.get("src")])
+
+    return {
+        "title": title[:200] if title else "Untitled",
+        "snippet": snippet,
+        "occurrences": total_occurrences,
+        "found_in_title": found_in_title,
+        "found_in_description": found_in_description,
+        "found_in_body": found_in_body,
+        "found_in_url": found_in_url,
+        "language": language,
+        "discovered_at": pub_date or datetime.now(timezone.utc),
+        "domain": domain,
+        "content_hash": content_hash,
+        "description": description,
+        "full_content": markdown_content,
+        "raw_html": html_content,
+        "author": author[:100] if author else "Unknown",
+        "simhash": simhash_val,
+
+        "image_url": image_url,
+        "image_links": image_links_json,
+        "video_links": video_links_json,
+        "relevance_score": relevance_score,
+        "matched": matched,
+        "matched_keywords": json.dumps(matched_keywords_found)
+    }
