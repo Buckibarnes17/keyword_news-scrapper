@@ -245,7 +245,14 @@ def test_not_valid_status_dropped():
 
 # ── crawl4ai-absent fallback path ────────────────────────────────────────────────
 def test_crawl4ai_absent_uses_xml_fallback(monkeypatch):
-    assert ns.CRAWL4AI_AVAILABLE is False
+    """When crawl4ai is absent, discover() must still work end-to-end via the
+    XML path. Force the premise (CRAWL4AI_AVAILABLE False) explicitly rather
+    than asserting on the ambient environment -- see conftest.py's
+    force_crawl4ai_unavailable fixture docstring for why. news_sitemap.py
+    imports CRAWL4AI_AVAILABLE by name from sitemap.py, creating its own
+    independent module-level binding, so it must be patched here specifically
+    (patching sitemap.CRAWL4AI_AVAILABLE would not affect this module)."""
+    monkeypatch.setattr(ns, "CRAWL4AI_AVAILABLE", False)
     shard = "https://kathmandupost.com/sitemap/news/1"
     table = {shard: _news_urlset([
         ("https://kathmandupost.com/national/2026/08/01/x", "2026-08-01T20:13:00+05:45", None),

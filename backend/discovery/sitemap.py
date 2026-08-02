@@ -334,30 +334,79 @@ class RobotsAwareMixin:
 
 
 # ── crawl4ai bridge ──────────────────────────────────────────────────────────────────
-def run_async(coro):
-    """Run an async crawl4ai coroutine to completion from discover()'s synchronous
-    contract. asyncio.run() raises if called from inside an already-running event
-    loop (e.g. if discover() is ever invoked from async code, or from a worker that
-    itself owns a loop) — detect that case and run the coroutine in a dedicated
-    thread with its own fresh loop instead, so this never explodes inside the
-    existing ThreadPoolExecutor-based pipeline.
-    """
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.run(coro)
+# Hard bound on any single crawl4ai AsyncUrlSeeder call. Without this, an
+# unconstrained seeder.urls(domain, pattern="*", extract_head=True) call against a
+# site with a large sitemap surface (e.g. cgtn.com's 27-child sitemapindex, one
+# child alone 30k URLs) can auto-discover and head-fetch tens of thousands of URLs
+# before max_urls ever truncates the result — confirmed live to hang past 150s.
+# 40s is generous for a normal small-sitemap fetch to complete, but bounded enough
+# that a multi-site unattended batch job cannot get stuck for hours on one bad site.
+_CRAWL4AI_TIMEOUT_S = 40.0
 
+
+def run_async(coro, timeout: Optional[float] = None):
+    """Run an async crawl4ai coroutine to completion from discover()'s synchronous
+    contract, ALWAYS on a dedicated daemon thread with its own fresh event loop
+    (regardless of whether the calling thread already owns a running loop), so
+    this never explodes inside the existing ThreadPoolExecutor-based pipeline
+    and so a hang can be bounded by a real thread.join(timeout=...) below.
+
+    Why not just `asyncio.wait_for(coro, timeout)` + `asyncio.run()`, which is
+    the obvious first attempt: verified LIVE against cgtn.com that it is NOT
+    sufficient on its own. wait_for's internal timer does fire and correctly
+    raises TimeoutError out of the wrapped coroutine -- but `asyncio.run()`
+    then runs its own automatic teardown (`_cancel_all_tasks` + `loop.close()`)
+    over EVERY task still remaining in the loop, not just the one we wrapped.
+    crawl4ai's AsyncUrlSeeder leaves orphaned background tasks/connections in
+    the loop (its extract_head=True path can have thousands in flight for an
+    unconstrained pattern="*" seed); asyncio.run()'s teardown tries to
+    responsibly cancel-and-await all of them, and that was observed to block
+    for minutes past the wait_for timeout -- i.e. the exact hang this function
+    exists to prevent, just moved a few frames deeper. A faulthandler stack
+    dump taken mid-hang showed the runner thread sitting in
+    asyncio.runners.close() -> _cancel_all_tasks(), well past `timeout`.
+
+    The fix: drive the loop manually with `loop.run_until_complete()` instead
+    of `asyncio.run()`, so only the coroutine we actually asked for (already
+    time-boxed by wait_for) is awaited -- we deliberately skip the full-loop
+    cancel-everything teardown and simply let the thread (and its loop, and
+    any orphans crawl4ai left behind) be abandoned/garbage-collected once our
+    coroutine returns. Ok for a best-effort fallback path invoked from a
+    daemon thread. `timeout` additionally bounds a `t.join()` on the CALLING
+    thread as the actual hard backstop, in case the coroutine ever fails to
+    honour wait_for's cancellation at all (e.g. a non-cooperative blocking
+    call within its own call stack) -- in that case we abandon the still-
+    running background thread entirely and return control to the caller
+    anyway, exactly like any other crawl4ai failure.
+    """
     box: Dict[str, Any] = {}
 
     def _runner() -> None:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
         try:
-            box["result"] = asyncio.run(coro)
-        except Exception as exc:  # pragma: no cover - re-raised on the caller's thread
+            run_coro = asyncio.wait_for(coro, timeout=timeout) if timeout is not None else coro
+            box["result"] = loop.run_until_complete(run_coro)
+        except Exception as exc:  # re-raised on the caller's thread below
             box["error"] = exc
+        # Deliberately NOT loop.close() / asyncio.run()-style _cancel_all_tasks
+        # here -- see docstring above for why that teardown itself hangs.
 
     t = threading.Thread(target=_runner, daemon=True)
     t.start()
-    t.join()
+    # Grace period beyond wait_for's own timeout for its cancellation to land
+    # inside the coroutine; None (no timeout requested) joins indefinitely,
+    # matching the previous behaviour for callers that don't ask for a bound.
+    join_timeout = (timeout + 10) if timeout is not None else None
+    t.join(join_timeout)
+    if t.is_alive():
+        log.warning(
+            "crawl4ai coroutine still running %.0fs after its %.0fs asyncio "
+            "timeout; abandoning the background thread and returning control",
+            join_timeout, timeout)
+        raise TimeoutError(
+            f"crawl4ai coroutine did not stop within {join_timeout}s of a "
+            f"{timeout}s timeout")
     if "error" in box:
         raise box["error"]
     return box.get("result")
@@ -396,7 +445,15 @@ def seed_via_crawl4ai(domain: str, pattern: str, keyword: Optional[str],
                 res = await seeder.urls(domain, cfg)
                 return res or []
 
-        return run_async(_run())
+        return run_async(_run(), timeout=_CRAWL4AI_TIMEOUT_S)
+    except (asyncio.TimeoutError, TimeoutError) as exc:
+        # Explicit branch for clarity/logging even though asyncio.TimeoutError is
+        # a TimeoutError/Exception subclass on this repo's Python (3.11+) and
+        # would already be caught below — a hung seeder call must behave exactly
+        # like any other crawl4ai failure: log and fall through to the XML walk.
+        log.warning("crawl4ai AsyncUrlSeeder timed out after %ss for %s; falling back",
+                    _CRAWL4AI_TIMEOUT_S, domain)
+        return None
     except Exception as exc:
         log.warning("crawl4ai AsyncUrlSeeder failed for %s: %s", domain, exc)
         return None

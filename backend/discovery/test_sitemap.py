@@ -210,9 +210,13 @@ def test_no_sitemaps_in_profile_falls_back_and_warns(monkeypatch, caplog):
 
 
 def test_crawl4ai_absent_uses_xml_fallback(monkeypatch):
-    """crawl4ai is not installed on this machine - CRAWL4AI_AVAILABLE must be False
-    and discover() must still work end-to-end via the XML path."""
-    assert sm.CRAWL4AI_AVAILABLE is False
+    """When crawl4ai is absent, discover() must still work end-to-end via the
+    XML path. Force the premise (CRAWL4AI_AVAILABLE False) explicitly rather
+    than asserting on the ambient environment -- whether crawl4ai happens to
+    be installed in whatever machine runs this suite must not change the
+    outcome (a global autouse fixture in conftest.py already defaults this,
+    but the test states its own premise so it stays correct in isolation)."""
+    monkeypatch.setattr(sm, "CRAWL4AI_AVAILABLE", False)
     shard_url = "https://pri.gov.np/sitemap-news.xml"
     table = {shard_url: _urlset([("https://pri.gov.np/content/1/a/", "2026-08-01")])}
     _patch_fetch(monkeypatch, table)

@@ -20,8 +20,9 @@ import time
 import re
 import threading
 import json
+import os
 from datetime import datetime, timedelta, timezone
-from typing import List, Dict, Set, Tuple, Any
+from typing import List, Dict, Set, Tuple, Any, Optional
 from urllib.parse import urlparse, urljoin
 import xml.etree.ElementTree as ET
 from sqlalchemy.orm import Session
@@ -35,6 +36,15 @@ from backend.crawler import Crawler
 from bs4 import BeautifulSoup
 from backend.site_search_detector import SiteSearchDetector
 from backend.url_classifier import filter_candidate_urls, is_chinese_url
+# Import the strategy submodules (not just `base`) so their @register decorators
+# actually run and populate base._REGISTRY - without this, base.get_strategy()
+# returns None for every profile and every site silently falls back to legacy
+# link-expansion discovery, defeating the entire adaptive discovery layer.
+from backend.discovery import (
+    base as discovery_base,
+    wp_api, oai_pmh, sitemap, news_sitemap, site_search, deep_crawl,
+)
+from backend.discovery.base import DiscoveredURL
 
 # Thread-safe shared state variables
 _shared_aborted_jobs = {}
@@ -42,10 +52,89 @@ _shared_aborted_lock = threading.Lock()
 _shared_domain_last_crawl = {}
 _shared_domain_lock = threading.Lock()
 _shared_process_stop_event = threading.Event()
+# Job-wide cap on TOTAL concurrently-executing crawl_url_task fetch+parse work,
+# regardless of how many keywords run concurrently or how large each keyword's
+# own ThreadPoolExecutor is sized. Nothing previously capped this: per-keyword
+# pool size (~15 workers) x concurrent keywords (~8) multiplied unboundedly
+# toward ~120+ simultaneous Python threads. Confirmed via direct reproduction
+# that Python's GIL cannot service that many concurrent threads doing real
+# I/O+CPU-bound work (HTML parsing, language detection, hashing) efficiently:
+# 120 threads completed only 13% of a real 505-URL batch within 130s; the SAME
+# batch at 30 threads completed 29% with ZERO individual tasks exceeding the
+# crawl watchdog. 25 is a conservative middle value from that data.
+_CRAWL_CONCURRENCY_SEMAPHORE = threading.BoundedSemaphore(
+    int(os.environ.get("KS_MAX_CONCURRENT_CRAWLS", "25"))
+)
+# Per-domain locks for _reserve_domain_slot()'s slot-reservation critical section -
+# separate from _shared_domain_lock, which now only guards brief get-or-create of
+# an entry here. See _reserve_domain_slot()'s docstring for why.
+_shared_domain_slot_locks: Dict[str, threading.Lock] = {}
 
 # Fallback structures for non-multiprocessed local tasks
 DOMAIN_LAST_CRAWL: Dict[str, float] = {}
 domain_lock = threading.Lock()
+_domain_slot_locks: Dict[str, threading.Lock] = {}
+
+
+def _get_domain_slot_lock(domain: str, registry: Dict[str, threading.Lock],
+                           meta_lock: threading.Lock) -> threading.Lock:
+    """Get-or-create a per-domain lock in `registry`, guarded briefly by
+    `meta_lock` only for the creation itself - not held during actual use."""
+    lock = registry.get(domain)
+    if lock is not None:
+        return lock
+    with meta_lock:
+        lock = registry.get(domain)
+        if lock is None:
+            lock = threading.Lock()
+            registry[domain] = lock
+        return lock
+
+
+def _reserve_domain_slot(domain: str, rate_limit_s: float,
+                          last_crawl_registry: Dict[str, float],
+                          slot_lock_registry: Dict[str, threading.Lock],
+                          meta_lock: threading.Lock,
+                          check_stopped) -> bool:
+    """
+    Reserves the next available crawl-fetch slot for `domain` and sleeps until it
+    arrives, WITHOUT busy-wait polling. Returns False if `check_stopped()` fires
+    during the wait (caller should treat the task as aborted), True otherwise.
+
+    Replaces a previous while-True busy-wait design where every thread wanting a
+    domain's turn repeatedly re-acquired ONE GLOBAL lock (shared across every
+    domain in the whole job, not just this one) to check-then-sleep-then-recheck.
+    Under real concurrent load (up to ~150 threads across several keyword pools,
+    several legitimately sharing the same domains) that created severe GIL/lock
+    contention - confirmed live: a pilot run left ~84% of tasks failing a 120s
+    watchdog despite a fully idle 48-core host and sub-2-second direct response
+    times from the exact same domains, which rules out both hardware and network
+    as the cause.
+
+    This design: each thread computes and reserves its OWN unique slot time in a
+    single brief PER-DOMAIN critical section (`max(now, previous_slot +
+    rate_limit_s)`), then sleeps ONCE for exactly its own precomputed duration -
+    no repeated lock re-acquisition, and threads waiting on DIFFERENT domains
+    never contend with each other at all (the shared meta_lock is only held for
+    the brief get-or-create of a per-domain lock, not for the reservation math or
+    the sleep). Preserves the original semantic of rate-limiting request
+    INITIATION timing, not full serialization - a slow fetch doesn't block the
+    next slot from being reserved.
+    """
+    slot_lock = _get_domain_slot_lock(domain, slot_lock_registry, meta_lock)
+    with slot_lock:
+        now = time.time()
+        last_slot = last_crawl_registry.get(domain, 0.0)
+        slot_time = max(now, last_slot + rate_limit_s)
+        last_crawl_registry[domain] = slot_time
+    end = slot_time
+    while True:
+        remaining = end - time.time()
+        if remaining <= 0:
+            return True
+        if check_stopped():
+            return False
+        time.sleep(min(0.5, remaining))
 
 def request_job_stop(search_id: int):
     with _shared_aborted_lock:
@@ -276,6 +365,7 @@ def crawl_url_task(
 
     db = None
     result = {"status": "failed", "error_message": None}
+    _sem_acquired = False
     try:
         db = SessionLocal()
         crawled_url = db.scalars(select(CrawledURL).where(CrawledURL.id == url_id)).first()
@@ -318,32 +408,27 @@ def crawl_url_task(
             except (TypeError, ValueError):
                 domain_rate_limit = 1.0
 
-        # 1. Enforce Domain Rate Limiting
-        while True:
-            if check_stopped():
-                return url_id, {"status": "skipped", "error_message": "Job aborted by user."}
-                
-            if shared_domain_last_crawl_dict is not None and shared_domain_lock is not None:
-                with shared_domain_lock:
-                    now = time.time()
-                    last_crawl = shared_domain_last_crawl_dict.get(domain, 0.0)
-                    elapsed = now - last_crawl
-                    remaining = domain_rate_limit - elapsed
-                    if remaining <= 0:
-                        shared_domain_last_crawl_dict[domain] = now
-                        break
-            else:
-                with domain_lock:
-                    now = time.time()
-                    last_crawl = DOMAIN_LAST_CRAWL.get(domain, 0.0)
-                    elapsed = now - last_crawl
-                    remaining = domain_rate_limit - elapsed
-                    if remaining <= 0:
-                        DOMAIN_LAST_CRAWL[domain] = now
-                        break
-                        
-            # Sleep for the exact remaining duration to avoid active spinning
-            time.sleep(max(0.01, remaining))
+        # 1. Enforce Domain Rate Limiting - see _reserve_domain_slot()'s docstring
+        # for why this no longer busy-waits on one lock shared across every domain.
+        if shared_domain_last_crawl_dict is not None and shared_domain_lock is not None:
+            last_crawl_registry = shared_domain_last_crawl_dict
+            meta_lock = shared_domain_lock
+            slot_lock_registry = _shared_domain_slot_locks
+        else:
+            last_crawl_registry = DOMAIN_LAST_CRAWL
+            meta_lock = domain_lock
+            slot_lock_registry = _domain_slot_locks
+
+        if not _reserve_domain_slot(domain, domain_rate_limit, last_crawl_registry,
+                                     slot_lock_registry, meta_lock, check_stopped):
+            return url_id, {"status": "skipped", "error_message": "Job aborted by user."}
+
+        # Job-wide cap on concurrent fetch+parse work - see
+        # _CRAWL_CONCURRENCY_SEMAPHORE's definition for why. Released in this
+        # function's outer `finally:` block below via the _sem_acquired flag, so
+        # it's freed on every exit path (success, exception, or early return).
+        _CRAWL_CONCURRENCY_SEMAPHORE.acquire()
+        _sem_acquired = True
 
         crawler = Crawler(proxy_url=proxy_url)
         
@@ -452,22 +537,58 @@ def crawl_url_task(
                 result["error_message"] = f"Parsing Error: {str(e)}"
                 
     finally:
+        if _sem_acquired:
+            _CRAWL_CONCURRENCY_SEMAPHORE.release()
         if db is not None:
             db.close()
     return url_id, result
 
-def run_direct_discovery(unique_raw_urls: List[str], query) -> Tuple[Dict[str, List[str]], Set[str]]:
+_SITE_PROFILES_CACHE = None
+
+
+def _load_site_profiles():
+    global _SITE_PROFILES_CACHE
+    if _SITE_PROFILES_CACHE is None:
+        try:
+            with open("config/site_profiles.json") as f:
+                _SITE_PROFILES_CACHE = json.load(f).get("profiles", {})
+        except Exception as e:
+            print(f"[SiteProfiles] Failed to load config/site_profiles.json: {e}")
+            _SITE_PROFILES_CACHE = {}
+    return _SITE_PROFILES_CACHE
+
+
+def run_direct_discovery(
+    unique_raw_urls: List[str], query, keyword: Optional[str] = None
+) -> Tuple[Dict[str, List[DiscoveredURL]], Set[str]]:
     """
-    Runs keyword-independent URL discovery (sitemap, feed, or link expansion)
-    once per unique URL.
+    Runs URL discovery once per unique URL, dispatching to the per-site adaptive
+    discovery layer (config/site_profiles.json) when a profile is registered for
+    the domain, and falling back to the legacy sitemap/feed/link-expansion logic
+    otherwise (or when a profile requires a keyword that wasn't supplied).
+
+    Every candidate URL, from every code path, is wrapped in a DiscoveredURL so the
+    metadata it carries (published_at, title, relevance_score) survives to the
+    caller instead of being flattened back to a bare string. That metadata is what
+    lets stale/irrelevant URLs get dropped before a fetch is attempted.
+
     Returns:
-      - A dict mapping d_url -> List[discovered_urls]
+      - A dict mapping d_url -> List[DiscoveredURL]
       - A set of bare domains of the direct URLs
     """
     discovered_candidates = {}
     searched_domains = set()
 
-    def _discover_single(d_url: str) -> Tuple[str, List[str], Optional[str]]:
+    def _wrap_legacy(urls: List[str]) -> List[DiscoveredURL]:
+        wrapped = []
+        for u in urls:
+            try:
+                wrapped.append(DiscoveredURL(url=u, source="legacy"))
+            except ValueError:
+                continue
+        return wrapped
+
+    def _discover_single(d_url: str) -> Tuple[str, List[DiscoveredURL], Optional[str]]:
         if is_job_stopped(query.id):
             return d_url, [], None
 
@@ -481,6 +602,32 @@ def run_direct_discovery(unique_raw_urls: List[str], query) -> Tuple[Dict[str, L
         od = parsed.netloc.lower()
         domain = od[4:] if od.startswith("www.") else od
 
+        # Adaptive discovery: profile-driven strategy dispatch
+        profile = _load_site_profiles().get(domain)
+        if profile is not None:
+            strategy = discovery_base.get_strategy(profile)
+            use_profile = strategy is not None
+            # A `search`-strategy site needs a keyword to return anything (its discover()
+            # immediately errors out "requires a keyword; none given" otherwise). This
+            # function is sometimes called keyword-independently, so in that case fall
+            # through to the legacy path rather than getting an empty result for every
+            # site that uses site-native search.
+            if use_profile and profile.get("strategy") == "search" and not keyword:
+                use_profile = False
+            if use_profile:
+                import os as _os_dd
+                max_urls = int(_os_dd.environ.get("KS_MAX_CANDIDATE_URLS", "500"))
+                effective_since = query.date_range_start
+                if effective_since is None:
+                    from datetime import timedelta as _timedelta
+                    effective_since = datetime.now(timezone.utc) - _timedelta(days=90)
+                if effective_since.tzinfo is None:
+                    effective_since = effective_since.replace(tzinfo=timezone.utc)
+                result = strategy.discover(keyword=keyword, max_urls=max_urls, since=effective_since)
+                for err in result.errors:
+                    print(f"[Discovery:{profile.get('strategy')}] {domain}: {err}")
+                return d_url, result.urls, domain
+
         # Sitemap check
         if path.endswith(".xml") or "sitemap" in path:
             try:
@@ -489,10 +636,10 @@ def run_direct_discovery(unique_raw_urls: List[str], query) -> Tuple[Dict[str, L
                     return d_url, [], domain
                 urls = discover_from_sitemap(d_url, max_urls=500)
                 print(f"[SitemapDiscovery] Found {len(urls)} URLs for sitemap: {d_url}")
-                return d_url, urls, domain
+                return d_url, _wrap_legacy(urls), domain
             except Exception as e:
                 print(f"[SitemapDiscovery] Failed for {d_url}: {e}")
-                return d_url, [d_url], domain
+                return d_url, _wrap_legacy([d_url]), domain
 
         # Feed check
         elif "rss" in path or "feed" in path or "atom" in path or path.endswith("/feed") or path.endswith("/feed/"):
@@ -502,10 +649,10 @@ def run_direct_discovery(unique_raw_urls: List[str], query) -> Tuple[Dict[str, L
                     return d_url, [], domain
                 urls = discover_from_feeds(d_url, max_urls=200)
                 print(f"[FeedDiscovery] Found {len(urls)} URLs for feed: {d_url}")
-                return d_url, urls, domain
+                return d_url, _wrap_legacy(urls), domain
             except Exception as e:
                 print(f"[FeedDiscovery] Failed for {d_url}: {e}")
-                return d_url, [d_url], domain
+                return d_url, _wrap_legacy([d_url]), domain
 
         # Regular URL -> link expansion
         else:
@@ -513,10 +660,10 @@ def run_direct_discovery(unique_raw_urls: List[str], query) -> Tuple[Dict[str, L
             local_crawler = Crawler(proxy_url=getattr(query, 'proxy_url', None))
             try:
                 if is_job_stopped(query.id):
-                    return d_url, [d_url], domain
+                    return d_url, _wrap_legacy([d_url]), domain
                 html_text = local_crawler.fetch_page(d_url, engine="fast", ignore_robots=getattr(query, 'ignore_robots', False))
                 if is_job_stopped(query.id):
-                    return d_url, [d_url], domain
+                    return d_url, _wrap_legacy([d_url]), domain
                 soup = BeautifulSoup(html_text, "html.parser")
                 count = 0
                 for a in soup.find_all("a"):
@@ -542,7 +689,7 @@ def run_direct_discovery(unique_raw_urls: List[str], query) -> Tuple[Dict[str, L
                 print(f"[WARNING] Failed to expand links for {d_url}: {ex}")
             finally:
                 local_crawler.close()
-            return d_url, candidates, domain
+            return d_url, _wrap_legacy(candidates), domain
 
     # Concurrently run discovery for each direct URL (I/O bound)
     if unique_raw_urls:
@@ -570,7 +717,15 @@ def run_direct_discovery(unique_raw_urls: List[str], query) -> Tuple[Dict[str, L
                 for fut in done:
                     try:
                         d_url, candidates, domain = fut.result()
-                        discovered_candidates[d_url] = list(dict.fromkeys(candidates))
+                        # Dedup by URL, not by object identity - DiscoveredURL is an
+                        # unhashable dataclass (default eq=True disables __hash__).
+                        seen_urls = set()
+                        deduped = []
+                        for du in candidates:
+                            if du.url not in seen_urls:
+                                seen_urls.add(du.url)
+                                deduped.append(du)
+                        discovered_candidates[d_url] = deduped
                         if domain:
                             searched_domains.add(domain)
                     except Exception as ex:
@@ -581,6 +736,87 @@ def run_direct_discovery(unique_raw_urls: List[str], query) -> Tuple[Dict[str, L
 
     return discovered_candidates, searched_domains
 
+from types import SimpleNamespace
+
+# Fields read (never written) off the `query` SearchQuery row from within
+# discovery/keyword worker threads. Kept in sync with every `query.<attr>` /
+# `getattr(query, ...)` read inside _process_single_keyword() and
+# run_direct_discovery().
+import os as _os_qm
+
+# Cumulative cap on candidates a single domain can contribute via site-restricted
+# web search across the WHOLE job (all keywords combined) - see the long comment
+# where this is applied for why: search_web() runs once per keyword per domain
+# and returns genuinely distinct real results each time, so nothing upstream
+# dedupes it, and per-domain crawl-fetch rate limiting is shared/serialized at
+# ~1 req/sec regardless of how many candidates are queued.
+_MAX_CANDIDATES_PER_DOMAIN = int(_os_qm.environ.get("KS_MAX_CANDIDATES_PER_DOMAIN", "100"))
+
+
+def _trim_to_domain_budget(url: str, candidates: List[str],
+                            domain_candidate_budget: Optional[Dict[str, int]],
+                            domain_budget_lock: Optional[threading.Lock]) -> List[str]:
+    """Trims `candidates` (freshly discovered for `url`'s domain by a per-keyword
+    mechanism - site-restricted web search or SiteSearchDetector) against the
+    domain's remaining share of _MAX_CANDIDATES_PER_DOMAIN for the whole job.
+
+    Both of those discovery mechanisms run once PER KEYWORD and return genuinely
+    distinct real URLs each time (not duplicates), so nothing upstream dedupes
+    across keywords - a "hot" domain's total candidate count is otherwise
+    unbounded by keyword count. Per-domain crawl-fetch rate limiting is shared/
+    serialized (~1 req/sec by default): a domain with N queued candidates makes
+    its last-queued task wait ~N seconds for a rate-limit turn, so bounding N
+    keeps that within the crawl-task watchdog's reach. No-op (returns candidates
+    unchanged) if the budget dict/lock weren't supplied - only real caller today
+    is process_search_query(), which always supplies both.
+    """
+    if domain_candidate_budget is None or domain_budget_lock is None or not candidates:
+        return candidates
+    domain = (urlparse(url).netloc or "").lower()
+    if domain.startswith("www."):
+        domain = domain[4:]
+    if not domain:
+        return candidates
+    with domain_budget_lock:
+        used = domain_candidate_budget.get(domain, 0)
+        remaining = max(0, _MAX_CANDIDATES_PER_DOMAIN - used)
+        trimmed = candidates[:remaining] if remaining < len(candidates) else candidates
+        domain_candidate_budget[domain] = used + len(trimmed)
+    return trimmed
+
+_QUERY_SNAPSHOT_FIELDS = (
+    "id", "source_type", "direct_urls", "domains_filter", "engine",
+    "proxy_url", "ignore_robots", "date_range_start", "date_range_end",
+    "match_type", "case_sensitive", "exact_match", "keyword", "languages_filter",
+)
+
+
+def _snapshot_query(query) -> SimpleNamespace:
+    """
+    Returns a plain, detached, thread-safe snapshot of the read-only fields that
+    discovery/keyword worker threads need from a SearchQuery row.
+
+    Root cause this exists to fix: process_search_query() fetches `query` ONCE
+    from its own `db` Session, then hands that same live ORM object to every
+    concurrent keyword thread (via ThreadPoolExecutor) and to
+    run_direct_discovery()'s internal worker pool. SQLAlchemy Sessions expire
+    all attributes on every commit() by default (expire_on_commit=True) - so the
+    next attribute read on `query` after any commit silently triggers a fresh
+    SELECT through that same Session/connection to refresh it. Sessions are not
+    thread-safe: two threads reading `query.<attr>` at once (or one reading while
+    the main thread is mid-commit on that same `db`) collide, and SQLAlchemy
+    raises "This session is provisioning a new connection; concurrent operations
+    are not permitted".
+
+    Taking one plain-object snapshot before any threads are spawned, and handing
+    *that* to every worker instead of the live ORM object, removes the shared
+    session-bound state entirely - worker-thread reads never touch the Session
+    again. The live `query` object stays owned by process_search_query()'s main
+    thread alone, for writes (status/status_message/counters) and commits.
+    """
+    return SimpleNamespace(**{field: getattr(query, field) for field in _QUERY_SNAPSHOT_FIELDS})
+
+
 def _process_single_keyword(
     search_id: int,
     kw: str,
@@ -590,13 +826,15 @@ def _process_single_keyword(
     seen_simhashes: list,
     seen_lock: threading.Lock,
     total_keyword_count: int,
-    pre_discovered_candidates: Dict[str, List[str]] = None,
+    pre_discovered_candidates: Dict[str, List[DiscoveredURL]] = None,
     pre_discovered_domains: Set[str] = None,
     discover_only: bool = False,
     crawl_only: bool = False,
     chinese_only: Optional[bool] = None,
     discovered_urls: Optional[List[str]] = None,
     mark_completed: bool = True,
+    domain_candidate_budget: Optional[Dict[str, int]] = None,
+    domain_budget_lock: Optional[threading.Lock] = None,
 ) -> List[str]:
     """
     Processes a single keyword within a search job: discovers candidate URLs,
@@ -604,9 +842,17 @@ def _process_single_keyword(
     Designed to run concurrently with other keywords via ThreadPoolExecutor.
     """
     db = SessionLocal()
+    # Bound before the try block so the final `return candidate_urls` (and the
+    # `except` handler's `if kp_record:` check) are always well-defined, even if
+    # an exception hits before Step 1 assigns candidate_urls or before kp_record
+    # is fetched below. Previously these were only assigned deep inside the try
+    # body, so an early failure (e.g. a DB session error) produced a confusing
+    # secondary `UnboundLocalError` on the way out instead of a clean failure.
+    candidate_urls: List[str] = []
+    kp_record = None
     try:
         if _queue_stop_event.is_set() or is_job_stopped(search_id):
-            return
+            return []
 
         kp_record = db.scalars(select(KeywordProgress).where(
             KeywordProgress.search_query_id == search_id,
@@ -615,7 +861,7 @@ def _process_single_keyword(
 
         if kp_record and kp_record.status == "completed":
             print(f"Skipping completed keyword '{kw}' for search {search_id}")
-            return
+            return []
 
         if kp_record:
             kp_record.status = "processing"
@@ -636,6 +882,20 @@ def _process_single_keyword(
 
         # ── Step 1: Gather candidate URLs ──
         candidate_urls = []
+        # Side-table preserving DiscoveredURL metadata (published_at, title,
+        # relevance_score) keyed by URL string, since candidate_urls itself stays a
+        # flat List[str] for all the downstream filtering/dedup/DB logic below.
+        url_metadata: Dict[str, DiscoveredURL] = {}
+
+        def _extend_from_discovered(d_url, mapping):
+            items = mapping.get(d_url)
+            if items is None:
+                candidate_urls.append(d_url)
+                return
+            for du in items:
+                candidate_urls.append(du.url)
+                url_metadata[du.url] = du
+
         if crawl_only and discovered_urls is not None:
             candidate_urls = list(dict.fromkeys(discovered_urls))
         elif query.source_type == "direct":
@@ -682,6 +942,9 @@ def _process_single_keyword(
                                 try:
                                     d_url, discovered_urls = fut.result()
                                     if discovered_urls:
+                                        discovered_urls = _trim_to_domain_budget(
+                                            d_url, discovered_urls,
+                                            domain_candidate_budget, domain_budget_lock)
                                         site_search_urls.extend(discovered_urls)
                                         site_search_domains_to_skip_expansion.add(d_url)
                                 except Exception as ex:
@@ -695,7 +958,7 @@ def _process_single_keyword(
                     if d_url in site_search_domains_to_skip_expansion:
                         pass
                     else:
-                        candidate_urls.extend(pre_discovered_candidates.get(d_url, [d_url]))
+                        _extend_from_discovered(d_url, pre_discovered_candidates)
 
                 # Add the site_search_urls
                 candidate_urls.extend(site_search_urls)
@@ -705,7 +968,10 @@ def _process_single_keyword(
                 raw_direct_urls = [line.strip() for line in (query.direct_urls or "").split("\n") if line.strip()]
                 unique_raw_urls = list(dict.fromkeys(raw_direct_urls))
                 
-                temp_candidates, searched_domains = run_direct_discovery(unique_raw_urls, query)
+                temp_candidates, searched_domains = run_direct_discovery(
+                    unique_raw_urls, query,
+                    keyword=(kw if kw.strip() and kw != "__config__" else None)
+                )
                 
                 site_search_urls = []
                 site_search_domains_to_skip_expansion = set()
@@ -741,6 +1007,9 @@ def _process_single_keyword(
                                 try:
                                     d_url, discovered_urls = fut.result()
                                     if discovered_urls:
+                                        discovered_urls = _trim_to_domain_budget(
+                                            d_url, discovered_urls,
+                                            domain_candidate_budget, domain_budget_lock)
                                         site_search_urls.extend(discovered_urls)
                                         site_search_domains_to_skip_expansion.add(d_url)
                                 except Exception:
@@ -753,7 +1022,7 @@ def _process_single_keyword(
                     if d_url in site_search_domains_to_skip_expansion:
                         pass
                     else:
-                        candidate_urls.extend(temp_candidates.get(d_url, [d_url]))
+                        _extend_from_discovered(d_url, temp_candidates)
                 candidate_urls.extend(site_search_urls)
 
             # Parallel site-restricted search for all discovered domains
@@ -775,7 +1044,15 @@ def _process_single_keyword(
                         return []
 
                 sr_pool = ThreadPoolExecutor(max_workers=min(10, len(searched_domains)))
-                sr_futures = [sr_pool.submit(_site_restricted_search, d) for d in searched_domains]
+                # Track which domain each future is for, so results can be trimmed
+                # against domain_candidate_budget below (a shared, cross-keyword,
+                # cross-thread cap - see its creation in process_search_query()).
+                sr_future_domain = {}
+                sr_futures = []
+                for d in searched_domains:
+                    f = sr_pool.submit(_site_restricted_search, d)
+                    sr_future_domain[f] = d
+                    sr_futures.append(f)
                 from concurrent.futures import wait, FIRST_COMPLETED
                 pending = list(sr_futures)
                 try:
@@ -787,7 +1064,35 @@ def _process_single_keyword(
                         done, pending = wait(pending, timeout=1.0, return_when=FIRST_COMPLETED)
                         for fut in done:
                             try:
-                                candidate_urls.extend(fut.result())
+                                results = fut.result()
+                                # Site-restricted web search is the mechanism that
+                                # inflates a single domain's candidate count: it runs
+                                # independently PER KEYWORD (unlike structured
+                                # discovery, which is computed once and shared), and
+                                # each keyword's query genuinely returns different
+                                # real articles - so nothing upstream deduplicates
+                                # this. A domain's cumulative candidates across the
+                                # WHOLE job can reach hundreds even though per-domain
+                                # crawl-fetch rate limiting is a shared, serialized
+                                # ~1 req/sec - meaning late-queued candidates on a
+                                # "hot" domain are mathematically guaranteed to
+                                # exceed the crawl-task watchdog before their turn
+                                # ever comes. Confirmed live: a pilot run against
+                                # thebalochistanpost.net alone produced 324 distinct,
+                                # real (non-duplicate) candidate URLs this way,
+                                #99.5% of which then failed on the watchdog. Cap
+                                # each domain's TOTAL contribution across the whole
+                                # job (not per-keyword) via a shared counter.
+                                domain = sr_future_domain.get(fut)
+                                if (domain and domain_candidate_budget is not None
+                                        and domain_budget_lock is not None):
+                                    with domain_budget_lock:
+                                        used = domain_candidate_budget.get(domain, 0)
+                                        remaining = max(0, _MAX_CANDIDATES_PER_DOMAIN - used)
+                                        if remaining < len(results):
+                                            results = results[:remaining]
+                                        domain_candidate_budget[domain] = used + len(results)
+                                candidate_urls.extend(results)
                             except Exception:
                                 pass
                 finally:
@@ -796,6 +1101,29 @@ def _process_single_keyword(
 
             candidate_urls = list(dict.fromkeys(candidate_urls))
             candidate_urls = filter_candidate_urls(candidate_urls)
+
+            # Drop candidates with a KNOWN stale published_at before a fetch is ever
+            # attempted - this is what recovers the 45s-watchdog-timeout loss. URLs
+            # with no known date (most legacy-path URLs) are never dropped here, per
+            # the discovery layer's never-fabricate/never-assume-absence-is-stale
+            # contract.
+            if url_metadata:
+                _effective_since = query.date_range_start
+                if _effective_since is None:
+                    from datetime import timedelta as _timedelta2
+                    _effective_since = datetime.now(timezone.utc) - _timedelta2(days=90)
+                if _effective_since.tzinfo is None:
+                    _effective_since = _effective_since.replace(tzinfo=timezone.utc)
+                _before = len(candidate_urls)
+                candidate_urls = [
+                    u for u in candidate_urls
+                    if not (u in url_metadata and url_metadata[u].published_at
+                            and url_metadata[u].published_at < _effective_since)
+                ]
+                _dropped = _before - len(candidate_urls)
+                if _dropped:
+                    print(f"[Discovery] Dropped {_dropped} stale URL(s) before fetch for '{kw}' "
+                          f"(published_at < {_effective_since.isoformat()})")
 
         elif query.source_type == "sitemap":
             base_url = (query.direct_urls or "").strip().splitlines()[0].strip()
@@ -884,11 +1212,15 @@ def _process_single_keyword(
                     domain_val = parsed.netloc.lower()
                     if domain_val.startswith("www."):
                         domain_val = domain_val[4:]
+                    _du = url_metadata.get(url)
                     new_rec = CrawledURL(
                         search_id=search_id,
                         url=url,
                         domain=domain_val,
-                        status="pending"
+                        status="pending",
+                        title=(_du.title if _du else None),
+                        relevance_score=(_du.relevance_score if _du and _du.relevance_score is not None else 0.0),
+                        discovered_at=(_du.published_at if _du and _du.published_at else datetime.now(timezone.utc)),
                     )
                     new_records.append(new_rec)
                     db_urls.append(new_rec)
@@ -951,6 +1283,36 @@ def _process_single_keyword(
         futures = {}
         executor = ThreadPoolExecutor(max_workers=max_workers)
         has_abandoned = False
+
+        def _domain_crawl_delay(domain: str) -> Optional[float]:
+            # config/site_profiles.json declares per-site politeness requirements
+            # (e.g. irrawaddy.com 10s, dvb.no 2s) that are verified load-bearing for
+            # avoiding an IP block - honour them at fetch time too, not just during
+            # discovery. Falls through to crawl_url_task's own KS_DOMAIN_RATE_LIMIT
+            # global default (1.0s) for any domain with no profile or no declared
+            # crawl_delay, exactly like base.DiscoveryStrategy.crawl_delay() does.
+            #
+            # Profiles are keyed by the site's registered domain, but several are
+            # scoped to a subdomain the actual crawled URLs live on (e.g.
+            # irrawaddy.com -> burma.irrawaddy.com, cgtn.com -> newsaf.cgtn.com,
+            # dvb.no -> burmese.dvb.no/english.dvb.no) - db_url.domain will be that
+            # subdomain, not the bare profile key, so match by suffix, same as
+            # base.DiscoveryStrategy.host_allowed()'s default scoping.
+            profiles = _load_site_profiles()
+            profile = profiles.get(domain)
+            if profile is None:
+                for prof_domain, prof in profiles.items():
+                    if domain == prof_domain or domain.endswith("." + prof_domain):
+                        profile = prof
+                        break
+            if not profile:
+                return None
+            d = (profile.get("robots") or {}).get("crawl_delay")
+            try:
+                return float(d) if d is not None else None
+            except (TypeError, ValueError):
+                return None
+
         try:
             for db_url in db_urls_to_crawl:
                 future = executor.submit(
@@ -967,7 +1329,7 @@ def _process_single_keyword(
                     languages_filter=languages_filter,
                     date_range_start=query.date_range_start,
                     date_range_end=query.date_range_end,
-                    domain_rate_limit=None,
+                    domain_rate_limit=_domain_crawl_delay(db_url.domain),
                     shared_aborted_jobs_dict=_shared_aborted_jobs,
                     shared_aborted_lock=_shared_aborted_lock,
                     shared_domain_last_crawl_dict=_shared_domain_last_crawl,
@@ -1057,22 +1419,35 @@ def _process_single_keyword(
                                 )
                             db.commit()
 
-                # Watchdog check for tasks running > 45s
+                # Watchdog check for tasks running too long. Raised from the
+                # original 45s: that value measures wall-clock time since a task
+                # was SUBMITTED to the executor, not since it started actually
+                # fetching - and per-domain crawl-fetch rate limiting is shared/
+                # serialized (~1 req/sec by default, or a site's declared
+                # crawl_delay). A domain with N queued candidates has its LAST
+                # task waiting ~N seconds just for its rate-limit turn before
+                # fetching anything; with the per-domain candidate budget above
+                # (_MAX_CANDIDATES_PER_DOMAIN, default 100) that worst case is
+                # ~100s, so 120s leaves real margin for genuinely slow fetches on
+                # top of that queueing delay rather than killing tasks that were
+                # simply waiting their turn.
+                _CRAWL_WATCHDOG_S = float(_os_qm.environ.get("KS_CRAWL_WATCHDOG_S", "120"))
                 now = time.time()
                 still_pending = []
                 for future in pending:
                     info = futures[future]
                     elapsed = now - info["start_time"]
-                    if elapsed > 45.0:
+                    if elapsed > _CRAWL_WATCHDOG_S:
                         has_abandoned = True
                         url_id = info["url_id"]
                         future.cancel()  # Try to cancel
-                        print(f"[Watchdog] Crawl task for URL ID {url_id} timed out (>45s) and was abandoned.")
+                        print(f"[Watchdog] Crawl task for URL ID {url_id} timed out "
+                              f"(>{_CRAWL_WATCHDOG_S:.0f}s) and was abandoned.")
 
                         db_item = db.scalars(select(CrawledURL).where(CrawledURL.id == url_id)).first()
                         if db_item and db_item.status == "pending":
                             db_item.status = "failed"
-                            db_item.error_message = "Task exceeded maximum duration of 45 seconds."
+                            db_item.error_message = f"Task exceeded maximum duration of {_CRAWL_WATCHDOG_S:.0f} seconds."
                             db.flush()
 
                             db.execute(
@@ -1111,11 +1486,17 @@ def _process_single_keyword(
         print(f"[ERROR] _process_single_keyword failed for '{kw}': {e}")
         if kp_record:
             try:
+                # The exception that landed us here may have left this Session's
+                # transaction in a failed/aborted state (e.g. a
+                # "concurrent operations are not permitted" or other DB error) -
+                # roll it back first so the failure write below isn't itself
+                # rejected because of a stale transaction.
+                db.rollback()
                 kp_record.status = "failed"
                 kp_record.completed_at = datetime.now(timezone.utc)
                 db.commit()
-            except Exception:
-                pass
+            except Exception as mark_failed_err:
+                print(f"[ERROR] Failed to record '{kw}' as failed after the error above: {mark_failed_err}")
     finally:
         db.close()
 
@@ -1138,6 +1519,12 @@ def process_search_query(search_id: int):
     query.status = "processing"
     query.updated_at = datetime.now(timezone.utc)
     db.commit()
+
+    # Thread-safe, read-only snapshot handed to every discovery/keyword worker
+    # thread from here on instead of the live `query` ORM object - see
+    # _snapshot_query()'s docstring for why sharing the live object across
+    # threads causes concurrent-session errors under real DB load.
+    query_ro = _snapshot_query(query)
 
     try:
         # Parse list of search keywords
@@ -1201,7 +1588,7 @@ def process_search_query(search_id: int):
             raw_direct_urls = [line.strip() for line in (query.direct_urls or "").split("\n") if line.strip()]
             unique_raw_urls = list(dict.fromkeys(raw_direct_urls))
             print(f"[Direct Discovery] Running keyword-independent discovery for {len(unique_raw_urls)} unique URLs...")
-            pre_discovered_candidates, pre_discovered_domains = run_direct_discovery(unique_raw_urls, query)
+            pre_discovered_candidates, pre_discovered_domains = run_direct_discovery(unique_raw_urls, query_ro)
         elif query.source_type == "sitemap":
             from backend.sitemap_discovery import discover_from_sitemap
             base_url = (query.direct_urls or "").strip().splitlines()[0].strip()
@@ -1231,6 +1618,11 @@ def process_search_query(search_id: int):
         # Keywords are independent; run them concurrently to eliminate N×serial cost.
         # Shared dedup state is protected by seen_lock.
         seen_lock = threading.Lock()
+        # Shared, cross-keyword, cross-thread cap on how many candidates a single
+        # domain can contribute via site-restricted web search across the WHOLE
+        # job - see _MAX_CANDIDATES_PER_DOMAIN's definition for why this exists.
+        domain_candidate_budget: Dict[str, int] = {}
+        domain_budget_lock = threading.Lock()
         import os
         _kw_max_workers = min(len(keywords_list), int(
             os.environ.get("KS_MAX_KEYWORD_WORKERS", "8")
@@ -1246,7 +1638,7 @@ def process_search_query(search_id: int):
                     _process_single_keyword,
                     search_id=search_id,
                     kw=kw,
-                    query=query,
+                    query=query_ro,
                     languages_filter=languages_filter,
                     seen_content_hashes=seen_content_hashes,
                     seen_simhashes=seen_simhashes,
@@ -1255,6 +1647,8 @@ def process_search_query(search_id: int):
                     pre_discovered_candidates=pre_discovered_candidates,
                     pre_discovered_domains=pre_discovered_domains,
                     discover_only=True,
+                    domain_candidate_budget=domain_candidate_budget,
+                    domain_budget_lock=domain_budget_lock,
                 ): kw
                 for kw in keywords_list
                 if not (_queue_stop_event.is_set() or is_job_stopped(search_id))
@@ -1318,7 +1712,7 @@ def process_search_query(search_id: int):
                                 _process_single_keyword,
                                 search_id=search_id,
                                 kw=kw,
-                                query=query,
+                                query=query_ro,
                                 languages_filter=languages_filter,
                                 seen_content_hashes=seen_content_hashes,
                                 seen_simhashes=seen_simhashes,
@@ -1330,6 +1724,8 @@ def process_search_query(search_id: int):
                                 chinese_only=True,
                                 discovered_urls=keyword_candidates.get(kw),
                                 mark_completed=mark_comp,
+                                domain_candidate_budget=domain_candidate_budget,
+                                domain_budget_lock=domain_budget_lock,
                             ): kw
                             for kw in keywords_list
                             if not (_queue_stop_event.is_set() or is_job_stopped(search_id))
@@ -1396,7 +1792,7 @@ def process_search_query(search_id: int):
                         _process_single_keyword,
                         search_id=search_id,
                         kw=kw,
-                        query=query,
+                        query=query_ro,
                         languages_filter=languages_filter,
                         seen_content_hashes=seen_content_hashes,
                         seen_simhashes=seen_simhashes,
@@ -1408,6 +1804,8 @@ def process_search_query(search_id: int):
                         chinese_only=None if disable_vpn else False,
                         discovered_urls=keyword_candidates.get(kw),
                         mark_completed=True,
+                        domain_candidate_budget=domain_candidate_budget,
+                        domain_budget_lock=domain_budget_lock,
                     ): kw
                     for kw in keywords_list
                     if not (_queue_stop_event.is_set() or is_job_stopped(search_id))

@@ -12,6 +12,7 @@ from backend.database import SessionLocal, init_db
 from backend.models import SearchQuery, CrawledURL, KeywordProgress, SearchSchedule
 from backend.queue_manager import process_search_query, run_direct_discovery
 from backend.scheduler import trigger_scheduled_search
+from backend.discovery.base import DiscoveredURL
 from sqlalchemy import select, func
 
 class TestDiscoveryDedup(unittest.TestCase):
@@ -25,8 +26,9 @@ class TestDiscoveryDedup(unittest.TestCase):
     def tearDown(self):
         self.db.close()
 
+    @patch('backend.queue_manager._load_site_profiles', return_value={})
     @patch('backend.queue_manager.Crawler')
-    def test_run_direct_discovery_dedup_and_routing(self, mock_crawler_class):
+    def test_run_direct_discovery_dedup_and_routing(self, mock_crawler_class, mock_profiles):
         # Setup mock Crawler behavior
         mock_crawler = MagicMock()
         mock_crawler_class.return_value = mock_crawler
@@ -72,11 +74,17 @@ class TestDiscoveryDedup(unittest.TestCase):
                 "https://example.com/regular-page", engine="fast", ignore_robots=True
             )
 
-            # Verify resolved candidate URLs mapping
-            self.assertEqual(candidates["https://example.com/sitemap.xml"], ["https://example.com/sitemap-item-1", "https://example.com/sitemap-item-2"])
-            self.assertEqual(candidates["https://example.com/rss"], ["https://example.com/feed-item-1"])
-            self.assertIn("https://example.com/news/1", candidates["https://example.com/regular-page"])
-            self.assertIn("https://example.com/news/2", candidates["https://example.com/regular-page"])
+            # Verify resolved candidate URLs mapping - run_direct_discovery now returns
+            # Dict[str, List[DiscoveredURL]], not plain strings, so the metadata that
+            # DiscoveredURL carries survives this boundary. Unwrap .url for comparison.
+            def _urls(key):
+                return [du.url for du in candidates[key]]
+
+            self.assertTrue(all(isinstance(du, DiscoveredURL) for du in candidates["https://example.com/sitemap.xml"]))
+            self.assertEqual(_urls("https://example.com/sitemap.xml"), ["https://example.com/sitemap-item-1", "https://example.com/sitemap-item-2"])
+            self.assertEqual(_urls("https://example.com/rss"), ["https://example.com/feed-item-1"])
+            self.assertIn("https://example.com/news/1", _urls("https://example.com/regular-page"))
+            self.assertIn("https://example.com/news/2", _urls("https://example.com/regular-page"))
             self.assertEqual(domains, {"example.com"})
 
     @patch('backend.queue_manager.Crawler')
@@ -114,8 +122,13 @@ class TestDiscoveryDedup(unittest.TestCase):
         with patch('backend.queue_manager.run_direct_discovery') as mock_disc:
             mock_disc.return_value = (
                 {
-                    "https://example.com/page1": ["https://example.com/page1", "https://example.com/page1/a"],
-                    "https://example.com/page2": ["https://example.com/page2"]
+                    "https://example.com/page1": [
+                        DiscoveredURL(url="https://example.com/page1", source="legacy"),
+                        DiscoveredURL(url="https://example.com/page1/a", source="legacy"),
+                    ],
+                    "https://example.com/page2": [
+                        DiscoveredURL(url="https://example.com/page2", source="legacy"),
+                    ]
                 },
                 {"example.com"}
             )

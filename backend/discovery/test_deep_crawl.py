@@ -58,9 +58,15 @@ class FakeSession:
 
 # ── crawl4ai-absent fallback ─────────────────────────────────────────────────
 
-def test_crawl4ai_unavailable_flag():
-    # This build machine does not have crawl4ai installed -- confirm the module
-    # detected that correctly and that discover() still works (BFS fallback path).
+def test_crawl4ai_unavailable_flag(monkeypatch):
+    # Whether crawl4ai happens to be installed in the environment running this
+    # suite must not change test outcomes. Force the premise explicitly rather
+    # than asserting on the ambient environment (a global autouse fixture in
+    # conftest.py already defaults every test in this directory to
+    # CRAWL4AI_AVAILABLE=False; this restates it so the test is correct in
+    # isolation too). The actual BFS-fallback *behavior* this flag gates is
+    # verified by test_bfs_fallback_used_when_crawl4ai_absent below.
+    monkeypatch.setattr(dc_module, "CRAWL4AI_AVAILABLE", False)
     assert dc_module.CRAWL4AI_AVAILABLE is False
 
 

@@ -150,6 +150,14 @@ _CF_CHALLENGE_BODY_MARKERS = (
 _HORNBILLTV_VERIFIED_HEAD_ID = 233465
 _HORNBILLTV_ID_WALK_COUNT = 200  # how many sequential IDs to probe per call
 
+# Hard bound on the crawl4ai BestFirstCrawlingStrategy path below. Mirrors the same
+# fix applied to backend/discovery/sitemap.py's AsyncUrlSeeder bridge: an
+# unattended, multi-site batch run must never be able to hang for hours on one
+# crawl4ai call. 40s is generous for a normal deep-crawl to complete within
+# MAX_PAGES_DEFAULT, but bounded enough to guarantee a fall-through to
+# _bfs_fallback() in time for the rest of the batch.
+_CRAWL4AI_TIMEOUT_S = 40.0
+
 
 @register
 class DeepCrawlStrategy(DiscoveryStrategy):
@@ -216,27 +224,77 @@ class DeepCrawlStrategy(DiscoveryStrategy):
                        result: DiscoveryResult) -> List[DiscoveredURL]:
         """Attempts the crawl4ai BestFirstCrawlingStrategy path. Only reachable
         when CRAWL4AI_AVAILABLE is True. Bridges the async crawl4ai API into this
-        sync method via asyncio.run(), detecting an already-running loop instead
-        of letting asyncio.run() raise inside it."""
+        sync method via a dedicated daemon thread with its own fresh event loop,
+        bounded by both an asyncio.wait_for() timeout AND a real
+        thread.join(timeout=...) backstop -- mirrors the fix applied to
+        backend/discovery/sitemap.py's run_async() (see that function's
+        docstring for the full rationale). This is NOT just belt-and-suspenders:
+        a bare `asyncio.run(asyncio.wait_for(coro, timeout))` executed directly
+        on the calling thread was verified LIVE to be insufficient for two
+        independent reasons --
+
+          1. asyncio.run()'s own teardown (_cancel_all_tasks) responsibly tries
+             to cancel-and-await every task still left in the loop once the
+             wrapped coroutine finishes/raises, not just the one task we
+             wrapped -- and that can hang far longer than `timeout` itself if
+             the async library being called (crawl4ai) has left orphaned
+             background tasks/connections that don't unwind quickly.
+          2. Even asyncio.wait_for's own cancellation is only a *request*: if
+             the coroutine (or something it awaits) catches CancelledError and
+             keeps going instead of propagating it, wait_for hangs forever
+             waiting for it to finish -- reproduced directly with a synthetic
+             non-cooperative coroutine, which blocked a bare
+             asyncio.run(wait_for(...)) call for over 30s with no bound at all.
+
+        Running on a dedicated thread lets the CALLING thread regain control
+        via thread.join(timeout=...) regardless of whether the crawl4ai
+        coroutine ever actually stops -- the only bound that is genuinely hard.
+        We also no longer need the previous "already inside a running event
+        loop" detection: a fresh loop on a fresh thread sidesteps that case
+        entirely.
+        """
         import asyncio
+        import threading
 
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            pass  # no running loop -- the expected case in this sync pipeline
-        else:
-            # We are already inside an event loop (e.g. some future async caller).
-            # asyncio.run() would raise here; do not attempt it.
+        box: Dict[str, Any] = {}
+
+        def _runner() -> None:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                box["result"] = loop.run_until_complete(
+                    asyncio.wait_for(self._run_crawl4ai_async(keyword, max_urls),
+                                      timeout=_CRAWL4AI_TIMEOUT_S))
+            except Exception as exc:
+                box["error"] = exc
+            # Deliberately no loop.close() / asyncio.run()-style
+            # _cancel_all_tasks here -- see docstring above for why that
+            # teardown itself can hang.
+
+        t = threading.Thread(target=_runner, daemon=True)
+        t.start()
+        join_timeout = _CRAWL4AI_TIMEOUT_S + 10
+        t.join(join_timeout)
+
+        if t.is_alive():
             result.errors.append(
-                f"{self.domain}: crawl4ai path skipped -- already inside a running "
-                f"event loop, cannot nest asyncio.run()")
+                f"{self.domain}: crawl4ai coroutine did not stop within "
+                f"{join_timeout}s of its {_CRAWL4AI_TIMEOUT_S}s timeout; "
+                f"abandoning the background thread and falling back to "
+                f"requests+lxml BFS")
             return []
 
-        try:
-            return asyncio.run(self._run_crawl4ai_async(keyword, max_urls))
-        except Exception as exc:
-            result.errors.append(f"{self.domain}: asyncio.run(crawl4ai) failed: {exc!r}")
+        if "error" in box:
+            exc = box["error"]
+            if isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
+                result.errors.append(
+                    f"{self.domain}: crawl4ai path timed out after "
+                    f"{_CRAWL4AI_TIMEOUT_S}s; falling back to requests+lxml BFS")
+            else:
+                result.errors.append(f"{self.domain}: crawl4ai path failed: {exc!r}")
             return []
+
+        return box.get("result") or []
 
     async def _run_crawl4ai_async(self, keyword: Optional[str],
                                    max_urls: int) -> List[DiscoveredURL]:
